@@ -1,5 +1,9 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -Modules ActiveDirectory
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 <#
 .SYNOPSIS
     Shows which AD users and groups are affected by Entra Cloud Sync AD object enforcement right now,
@@ -24,19 +28,27 @@
     Look-back window for the Security-log evidence (default 14).
 
 .PARAMETER OutputPath
-    Folder for CSV + HTML. Default: Desktop\SOA-Impact_<timestamp>
+    Folder for CSV + HTML. Default: <ReportPath>\Impact\<timestamp> (or Desktop\SOA-Impact_<timestamp> without configuration)
 
 .NOTES
-    Toolkit: cloudsync-ad-enforcement-toolkit 1.0.0 (2026-10-19)
-    Run as Domain Admin from a host with RSAT. Requires WinRM (5985) to every writable DC.
+    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Read-only. Run as Domain Admin from the admin workstation with RSAT. Requires WinRM (5985) to every writable DC.
+    Usable without the rest of the toolkit (without a configuration file the toolkit gMSA is simply not labelled).
 #>
 [CmdletBinding()]
 param(
     [int]    $Days = 14,
-    [string] $OutputPath = (Join-Path ([Environment]::GetFolderPath('Desktop')) ('SOA-Impact_{0:yyyyMMdd_HHmm}' -f (Get-Date)))
+    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1'),
+    [string] $OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$cfg = $null
+if (Test-Path -LiteralPath $ConfigPath) { try { $cfg = Import-SoaConfig -Path $ConfigPath } catch { Write-Warning $_.Exception.Message } }
+if (-not $OutputPath) {
+    $OutputPath = if ($cfg) { Join-Path $cfg.ReportPath ('Impact\{0:yyyyMMdd_HHmm}' -f (Get-Date)) } else { Join-Path ([Environment]::GetFolderPath('Desktop')) ('SOA-Impact_{0:yyyyMMdd_HHmm}' -f (Get-Date)) }
+}
 
 #region --- Context / helpers ----------------------------------------------------------------------
 $domain   = Get-ADDomain
@@ -101,11 +113,13 @@ if ($policy) {
     Write-Host ("Last changed    : {0}" -f $policy.whenChanged)
     $allowed | Format-Table Sid, Name -AutoSize | Out-Host
 } else {
-    Write-Host 'CN=Cloud does not exist yet - no enforcement active. Run Set-CloudSyncSOAPolicy.ps1 first.' -ForegroundColor Yellow
+    Write-Host 'CN=Cloud does not exist yet - no enforcement active (Install-SoaToolkit.ps1 -Step Policy creates it in mode Audit).' -ForegroundColor Yellow
     Write-Host 'Writers are classified without an allow-list (Cloud Sync agent changes will show as "would be blocked").' -ForegroundColor Yellow
 }
 $allowedSet = @{}
 foreach ($a in $allowed) { $allowedSet[$a.Sid] = $a.Name }
+$toolkitSid = $null
+if ($cfg) { try { $toolkitSid = (Get-ADServiceAccount -Identity $cfg.GmsaName -Server $pdc).SID.Value } catch { } }
 #endregion
 
 #region --- 2. Marked objects ----------------------------------------------------------------------
@@ -202,7 +216,9 @@ $evidence | ForEach-Object {
 
 $events = @(foreach ($ev in $evidence) {
     foreach ($r in $ev.Rows) {
-        $verdict = if ($r.SubjectSid -and $allowedSet.ContainsKey($r.SubjectSid)) { 'Allowed (allow-list)' }
+        $verdict = if ($r.SubjectSid -and $r.SubjectSid -eq $toolkitSid -and $allowedSet.ContainsKey($r.SubjectSid)) { 'Allowed (SOA Toolkit)' }
+                   elseif ($r.SubjectSid -and $r.SubjectSid -eq $toolkitSid) { 'SOA Toolkit - NOT allow-listed, WOULD BE BLOCKED' }
+                   elseif ($r.SubjectSid -and $allowedSet.ContainsKey($r.SubjectSid)) { 'Allowed (allow-list)' }
                    elseif ($r.SubjectSid -in 'S-1-5-18', 'S-1-5-19', 'S-1-5-20' -or $dcSids -contains $r.SubjectSid) { 'System / DC-internal (effect unverified)' }
                    else { 'WOULD BE BLOCKED' }
         [pscustomobject]@{
@@ -227,11 +243,11 @@ $summary = @($events | Group-Object Verdict, Subject | ForEach-Object {
         Targets  = (($g.Target | Select-Object -Unique | Select-Object -First 6) -join ', ')
         LastSeen = ($g | Sort-Object Time -Descending | Select-Object -First 1).Time
     }
-} | Sort-Object @{ e = { switch -Wildcard ($_.Verdict) { 'WOULD*' { 0 } 'System*' { 1 } default { 2 } } } }, Subject)
+} | Sort-Object @{ e = { switch -Wildcard ($_.Verdict) { '*WOULD*' { 0 } 'System*' { 1 } default { 2 } } } }, Subject)
 
 if ($summary.Count) {
     foreach ($s in $summary) {
-        $color = switch -Wildcard ($s.Verdict) { 'WOULD*' { 'Red' } 'System*' { 'Yellow' } default { 'Green' } }
+        $color = switch -Wildcard ($s.Verdict) { '*WOULD*' { 'Red' } 'System*' { 'Yellow' } default { 'Green' } }
         Write-Host ('[{0}] {1}  ({2} change(s), last {3})' -f $s.Verdict, $s.Subject, $s.Count, $s.LastSeen) -ForegroundColor $color
         Write-Host ('      events : {0}' -f $s.Events)
         Write-Host ('      targets: {0}' -f $s.Targets)
@@ -250,15 +266,16 @@ Write-Section '5. Effect of Enforced mode on the objects above'
     '  - rename / move (modify DN) and restore from the AD Recycle Bin'
     '  - security descriptor changes (ACL) on marked objects'
     'STILL ALLOWED (preview): delete; LDAP add; nesting a marked group into an unmarked group'
-    'NOT COVERED by the current tests: DC-internal writes (lockout counters, automatic secret rolling)'
-    '  and non-LDAP password paths. Validate the LDAP paths with Watch-CloudUserPasswordless.ps1 -Mode Test'
+    'NOT COVERED by the toolkit tests: DC-internal writes and non-LDAP paths. Automatic secret rolling at'
+    '  sign-in was observed to work (Test-SoaBehavior.ps1 -Suite RollingObserve). Validate the LDAP paths with'
+    '  Test-SoaBehavior.ps1 -Suite Enforcement, Onboarding'
 ) | ForEach-Object { Write-Host $_ }
-$blockedWriters = @($summary | Where-Object { $_.Verdict -eq 'WOULD BE BLOCKED' })
+$blockedWriters = @($summary | Where-Object { $_.Verdict -like '*WOULD BE BLOCKED' })
 Write-Host ''
 if ($blockedWriters.Count) {
     Write-Host ("{0} identity/identities changed marked objects in the window and would be blocked:" -f $blockedWriters.Count) -ForegroundColor Red
     $blockedWriters | ForEach-Object { Write-Host "  - $($_.Subject)" -ForegroundColor Red }
-    Write-Host 'Decide per identity: move the change to Entra ID, run it via the allow-listed job gMSA, or accept the block.' -ForegroundColor Red
+    Write-Host 'Decide per identity: move the change to Entra ID (source of authority), or accept the block. Do not add admin accounts to the allow-list.' -ForegroundColor Red
 } else {
     Write-Host 'No observed writer would be blocked (within the log coverage above).' -ForegroundColor Green
 }

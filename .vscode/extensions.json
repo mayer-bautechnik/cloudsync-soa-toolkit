@@ -1,0 +1,7 @@
+{
+    "recommendations": [
+        "ms-vscode.powershell",
+        "github.vscode-pull-request-github",
+        "davidanson.vscode-markdownlint"
+    ]
+}

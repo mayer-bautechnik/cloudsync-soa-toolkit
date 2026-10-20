@@ -1,0 +1,19 @@
+{
+    // Workspace settings for cloudsync-soa-toolkit (shared with all contributors)
+    "git.alwaysSignOff": true,
+    "git.inputValidationSubjectLength": 72,
+    "git.inputValidationLength": 100,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "editor.formatOnSave": false,
+    "[powershell]": {
+        "files.encoding": "utf8bom",
+        "files.eol": "\r\n"
+    },
+    "[markdown]": {
+        "files.encoding": "utf8",
+        "files.eol": "\n"
+    },
+    "powershell.scriptAnalysis.enable": true,
+    "powershell.scriptAnalysis.settingsPath": "PSScriptAnalyzerSettings.psd1"
+}

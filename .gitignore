@@ -1,0 +1,35 @@
+# Reports, state and logs written when ReportPath / DataPath / -OutputPath point into the working copy
+Reports/
+State/
+Logs/
+Journal/
+Status/
+SOA-Preflight_*/
+SOA-Impact_*/
+*.log
+*.jsonl
+manifest.json
+deployment.json
+rolling-baseline.json
+test-state.json
+behavior-findings.json
+
+# Local configuration copies (keep the template scripts/SoaToolkit.config.psd1 with placeholders)
+*.local.psd1
+SoaToolkit.config.*.psd1
+
+# Release packages and signing material
+*.zip
+*.pfx
+*.p12
+*.cer
+
+# Editor / OS
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+desktop.ini

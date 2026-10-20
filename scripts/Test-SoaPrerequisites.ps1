@@ -1,79 +1,86 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -Modules ActiveDirectory, GroupPolicy
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 <#
 .SYNOPSIS
-    Pre-flight / troubleshooting check for Microsoft Entra Cloud Sync "AD object enforcement" (SOA policy).
+    Read-only pre-flight / troubleshooting check: Microsoft Entra Cloud Sync "AD object enforcement" on every
+    writable DC, plus the prerequisites of the SOA Toolkit (topology, rolling, modules, OUs, test user).
 
 .DESCRIPTION
-    Collects and evaluates, for every WRITABLE domain controller of the current domain:
+    Part A - SOA Toolkit prerequisites (only with a configuration file; skipped with -EnforcementOnly)
+        - RSAT modules on this host, KDS root key, ToolkitGroupOU / BreakGlassOU exist
+        - domain functional level >= 2016 and msDS-ExpirePasswordsOnSmartCardOnlyAccounts (automatic rolling)
+        - every agent host: WinRM, provisioning agent service + gMSA, RSAT AD PowerShell, OS (Server Core is not
+          supported for the agent), domain controller or member server
+        - Group Policy central store present (ADMX of the KIR package)
+        - TestUser exists, is provisioned by Cloud Sync and marked
+        - write scope (WriteScope = AgentScope -> containers where the agent gMSA holds write permissions)
 
+    Part B - AD object enforcement, for every WRITABLE domain controller
       Host side (via WinRM, executed locally on each DC)
         - OS caption, build and UBR, last boot time, pending reboot indicators
-        - ntdsai.dll file version vs. documented minimum
-              Windows Server 2022: 10.0.20348.5257
-              Windows Server 2025: 10.0.26100.32995
+        - ntdsai.dll file version vs. documented minimum (WS2022 10.0.20348.5257, WS2025 10.0.26100.32995)
         - Known Issue Rollback (KIR) feature override values written by the KIR Group Policy
               HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides
-        - Resultant Set of Policy (gpresult /scope computer): is the KIR GPO really applied,
-          or filtered out by WMI filter / security filtering?
+        - Resultant Set of Policy (gpresult /scope computer): is the KIR GPO really applied, or filtered out
+          by WMI filter / security filtering?
         - Group Policy processing errors in the System log (last 24 h)
-        - NTDS diagnostics value "2 Security Events" (controls SOA events 3095/3097/3098)
-        - SOA events 3095 (policy load), 3097 (audit), 3098 (enforced block) - last 7 days
-
-      Directory side (LDAP/ADWS against each DC's own database copy)
-        - PDC emulator as seen by each DC (FSMO consistency)
-        - Presence of CN=SOA-Policies,CN=System,<domain> and CN=Cloud below it
-        - Originating DC and time of the container (engine-created on the PDCe vs. script-created)
-        - Inbound replication health of the domain partition
-
+        - NTDS diagnostics value "2 Security Events" (controls events 3095/3097/3098)
+        - events 3095 (policy load), 3097 (audit), 3098 (enforced block) - last 7 days
+      Directory side (ADWS against each DC's own database copy)
+        - PDC emulator as seen by each DC, CN=SOA-Policies / CN=Cloud, originating DC of the container
+          (engine-created on the PDCe vs. script-created), inbound replication of the domain partition
       Domain level
-        - KIR ADMX policy definitions (central store + local PolicyDefinitions) that write
-          FeatureManagement overrides, incl. their feature IDs and "enabled" values
-        - GPOs effective on the Domain Controllers OU that contain KIR settings:
-          link state, GPO status, AD/SYSVOL version consistency, WMI filter, apply permission for DCs
+        - KIR ADMX definitions (central store + local store), GPOs on the Domain Controllers OU with KIR settings
 
-    Output: colored matrix + findings + diagnosis in the console, and CSV / JSON / HTML report files.
+    Output: colored matrix + findings + diagnosis, and CSV / JSON / HTML report files.
 
 .PARAMETER KirGpoName
-    Display name of the GPO that deploys the KIR enablement package. Optional. If omitted, all GPOs
-    effective on the Domain Controllers OU are scanned for Known Issue Rollback / FeatureManagement settings.
+    Display name of the GPO that deploys the KIR package. Optional (default: all GPOs effective on the DC OU are scanned).
 
 .PARAMETER KirFeatureId
-    One or more FeatureManagement override IDs (the ADMX "valueName" of the KIR policy). Optional.
-    If omitted, the IDs are derived from the KIR GPO settings or from the KIR ADMX files.
+    FeatureManagement override IDs (ADMX valueName). Optional (derived from the KIR GPO / ADMX otherwise).
 
-.PARAMETER OutputPath
-    Folder for the CSV / JSON / HTML report. Default: Desktop\SOA-Preflight_<timestamp>
-
-.EXAMPLE
-    .\Test-SoaEnforcementPrereqs.ps1
+.PARAMETER EnforcementOnly
+    Only part B (usable without the rest of the toolkit / without a configuration file).
 
 .EXAMPLE
-    .\Test-SoaEnforcementPrereqs.ps1 -KirGpoName 'DC - KIR AD Object Enforcement'
+    .\Test-SoaPrerequisites.ps1
+    .\Test-SoaPrerequisites.ps1 -EnforcementOnly -KirGpoName 'DC - KIR AD Object Enforcement'
 
 .NOTES
-    Toolkit: cloudsync-ad-enforcement-toolkit 1.0.0 (2026-10-19)
+    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
     Complements Microsoft's Check-CloudSyncSOAPolicy.ps1, which only reads the domain-wide objects and the local
-    diagnostics value and does not verify the enforcement engine per DC (see README, upstream finding F3).
-    Run as Domain Admin from a management host with RSAT (ActiveDirectory, GroupPolicy modules).
-    Requires WinRM (TCP 5985) and Active Directory Web Services (TCP 9389) to every writable DC.
-    Read-only: the script does not change anything in AD, GPOs or on the DCs.
+    diagnostics value and does not verify the enforcement engine per DC (upstream finding F3).
+    Run as Domain Admin from the admin workstation with RSAT. WinRM (5985) and ADWS (9389) to every writable DC.
+    Read-only: nothing is changed in AD, GPOs or on any host.
 #>
 [CmdletBinding()]
 param(
     [string]   $KirGpoName,
     [string[]] $KirFeatureId,
-    [string]   $OutputPath = (Join-Path ([Environment]::GetFolderPath('Desktop')) ('SOA-Preflight_{0:yyyyMMdd_HHmm}' -f (Get-Date)))
+    [switch]   $EnforcementOnly,
+    [string]   $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1'),
+    [string]   $OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$cfg = $null
+if (-not $EnforcementOnly) {
+    if (Test-Path -LiteralPath $ConfigPath) { $cfg = Import-SoaConfig -Path $ConfigPath }
+    else { Write-Warning "No configuration at $ConfigPath - only the AD object enforcement checks (part B) are run." }
+}
+if (-not $OutputPath) {
+    $OutputPath = if ($cfg) { Join-Path $cfg.ReportPath ('Prerequisites\{0:yyyyMMdd_HHmm}' -f (Get-Date)) } else { Join-Path ([Environment]::GetFolderPath('Desktop')) ('SOA-Preflight_{0:yyyyMMdd_HHmm}' -f (Get-Date)) }
+}
 
 #region --- Constants ----------------------------------------------------------------------------
 # Minimum ntdsai.dll versions documented by Microsoft for AD object enforcement (keyed by OS build)
-$MinNtdsai = @{
-    20348 = [version]'10.0.20348.5257'    # Windows Server 2022
-    26100 = [version]'10.0.26100.32995'   # Windows Server 2025
-}
+$MinNtdsai = Get-SoaConstant 'MinNtdsai'     # WS2022 10.0.20348.5257, WS2025 10.0.26100.32995
 # Heuristic to recognize the enforcement KIR policy if neither feature ID nor matching GPO setting is known
 $KirNamePattern = '(?i)active directory|directory service|\bSOA\b|source of authority|enforcement|ntds|cloud sync'
 # Registry key (below HKLM) that KIR policies write their feature overrides to
@@ -153,6 +160,62 @@ Write-Host "Container DN     : $containerDN"
 
 if ($dcNames -notcontains $pdcFqdn) {
     Add-Check '(domain)' 'PDCe in writable DC list' 'FAIL' "PDC emulator $pdcFqdn is not in the list of writable DCs."
+}
+#endregion
+
+#region --- 1b. SOA Toolkit prerequisites (part A) ---------------------------------------------
+if ($cfg) {
+    Write-Section '1b. SOA Toolkit prerequisites'
+    foreach ($m in 'ActiveDirectory', 'GroupPolicy') {
+        Add-Check '(toolkit)' "Module $m (this host)" $(if (Get-Module -ListAvailable -Name $m) { 'PASS' } else { 'FAIL' }) 'RSAT on the admin workstation'
+    }
+    try { $kds = @(Get-KdsRootKey); Add-Check '(toolkit)' 'KDS root key' $(if ($kds.Count) { 'PASS' } else { 'FAIL' }) $(if ($kds.Count) { "$($kds.Count) key(s), effective $(($kds | Sort-Object EffectiveTime | Select-Object -First 1).EffectiveTime)" } else { 'missing - Add-KdsRootKey (gMSA prerequisite; never delete it later)' }) }
+    catch { Add-Check '(toolkit)' 'KDS root key' 'INFO' "not checked: $($_.Exception.Message)" }
+    foreach ($ou in @($cfg.ToolkitGroupOU, $cfg.BreakGlassOU) | Where-Object { $_ }) {
+        $ok = $false; try { $ok = [bool](Get-ADObject -Identity $ou -Server $pdcFqdn) } catch { }
+        Add-Check '(toolkit)' 'OU exists' $(if ($ok) { 'PASS' } else { 'FAIL' }) $ou
+    }
+    $root = Get-ADObject -Identity $domainDN -Server $pdcFqdn -Properties 'msDS-ExpirePasswordsOnSmartCardOnlyAccounts', 'msDS-Behavior-Version'
+    $dflv = [int]$root.'msDS-Behavior-Version'
+    Add-Check '(toolkit)' 'Domain functional level' $(if ($dflv -ge 7) { 'PASS' } else { 'FAIL' }) "msDS-Behavior-Version $dflv (automatic rolling needs >= 7 = Windows Server 2016)"
+    $rv = $root.'msDS-ExpirePasswordsOnSmartCardOnlyAccounts'
+    Add-Check '(toolkit)' 'Automatic rolling attribute' $(if ($rv -eq $true) { 'PASS' } else { 'WARN' }) "msDS-ExpirePasswordsOnSmartCardOnlyAccounts = $(if ($null -eq $rv) { 'not set' } else { $rv }) $(if ($rv -ne $true) { '- Install-SoaToolkit.ps1 -Step EnableRolling sets it' })"
+    $central = "\\$dnsRoot\SYSVOL\$dnsRoot\Policies\PolicyDefinitions"
+    Add-Check '(toolkit)' 'Group Policy central store' $(if (Test-Path -LiteralPath $central) { 'PASS' } else { 'INFO' }) $(if (Test-Path -LiteralPath $central) { $central } else { 'not present - KIR ADMX would be copied to the local store of the admin workstation only (the toolkit never creates a central store)' })
+    foreach ($h in @($cfg.AgentHosts)) {
+        $r = Invoke-SoaOnHost -ComputerName $h -ScriptBlock {
+            $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='AADConnectProvisioningAgent'"
+            $cv  = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+            $cs  = Get-CimInstance -ClassName Win32_ComputerSystem
+            [pscustomobject]@{
+                Service = $(if ($svc) { "$($svc.State)" } else { $null }); StartName = $(if ($svc) { $svc.StartName } else { $null })
+                Build = [int]$cv.CurrentBuild; Product = $cv.ProductName; InstallationType = $cv.InstallationType
+                IsDc = ($cs.DomainRole -ge 4); AdModule = [bool](Get-Module -ListAvailable -Name ActiveDirectory)
+            }
+        }
+        if (-not $r.Ok) { Add-Check $h 'Agent host reachable (WinRM)' 'FAIL' $r.Error; continue }
+        $x = $r.Result
+        Add-Check $h 'Agent host reachable (WinRM)' 'PASS' ("{0} build {1}, {2}, {3}" -f $x.Product, $x.Build, $x.InstallationType, $(if ($x.IsDc) { 'domain controller' } else { 'member server' }))
+        Add-Check $h 'Provisioning agent service' $(if ($x.Service -eq 'Running') { 'PASS' } elseif ($x.Service) { 'WARN' } else { 'FAIL' }) $(if ($x.Service) { "$($x.Service) as $($x.StartName)" } else { 'service AADConnectProvisioningAgent not found' })
+        if ($x.StartName -and $x.StartName -notmatch '\$$') { Add-Check $h 'Agent identity' 'WARN' "$($x.StartName) is not a gMSA - Entra -> AD provisioning requires the gMSA" }
+        Add-Check $h 'RSAT AD PowerShell' $(if ($x.AdModule) { 'PASS' } else { 'FAIL' }) $(if ($x.AdModule) { 'present' } else { 'missing - Install-WindowsFeature RSAT-AD-PowerShell (toolkit tasks need it)' })
+        if ($x.InstallationType -eq 'Server Core') { Add-Check $h 'Agent OS' 'WARN' 'Server Core: installing the provisioning agent on Server Core is not supported (Microsoft prerequisites)' }
+        if ($x.Build -ge 26100) { Add-Check $h 'Agent OS support statement' 'INFO' 'Windows Server 2025: recommended for the agent, but the AD DS provisioning prerequisites list only 2016-2022 (inconsistent Microsoft statement - keep in mind for support cases)' }
+    }
+    if ($cfg.TestUser) {
+        $tu = Get-ADUser -Filter "SamAccountName -eq '$($cfg.TestUser)'" -Server $pdcFqdn -Properties 'msDS-ExternalDirectoryObjectId', 'msDS-ObjectSoa'
+        if (-not $tu) { Add-Check '(toolkit)' 'TestUser' 'WARN' "$($cfg.TestUser) not found - create it in Entra ID and provision it" }
+        else {
+            $prov = "$($tu.'msDS-ExternalDirectoryObjectId')" -like 'User_*'
+            Add-Check '(toolkit)' 'TestUser' $(if ($prov -and $tu.'msDS-ObjectSoa') { 'PASS' } elseif ($prov) { 'WARN' } else { 'FAIL' }) ("provisioned: {0}, marked: {1}" -f $prov, (@($tu.'msDS-ObjectSoa') -join ','))
+        }
+    }
+    try {
+        $tctx = Get-SoaContext -Server $pdcFqdn
+        $ws = @(Get-SoaWriteScope -Config $cfg -Context $tctx)
+        Add-Check '(toolkit)' 'Write scope' $(if ($ws.Count) { 'PASS' } else { 'WARN' }) ("{0}: {1}" -f $cfg.WriteScope, ($ws -join '; '))
+    } catch { Add-Check '(toolkit)' 'Write scope' 'WARN' $_.Exception.Message }
+    $Checks | Where-Object { $_.DC -eq '(toolkit)' -or @($cfg.AgentHosts) -contains $_.DC } | Format-Table Status, DC, Check, Detail -AutoSize -Wrap | Out-Host
 }
 #endregion
 
@@ -242,7 +305,7 @@ if ($kirAdmx.Count) {
     $kirAdmx | Format-Table FeatureId, EnabledValue, InCentralStore, AdmxFile, DisplayName -AutoSize -Wrap | Out-Host
 } else {
     Write-Host 'No ADMX with FeatureManagement overrides found (central store or local PolicyDefinitions).' -ForegroundColor Yellow
-    Add-Check '(domain)' 'KIR ADMX' 'WARN' 'No KIR ADMX found. Install the KIR MSI and copy ADMX/ADML into the central store.'
+    Add-Check '(domain)' 'KIR ADMX' 'WARN' 'No KIR ADMX found. Install-SoaToolkit.ps1 -Step KirGpo -KirMsi2022/-KirMsi2025 copies them from the Microsoft package.'
 }
 
 $localOnly = @($kirAdmx | Where-Object { -not $_.InCentralStore })
@@ -671,7 +734,7 @@ foreach ($dcObj in $writableDCs) {
         }
 
         if ($a.PolicyPresent) { Add-Check $dc $C.Pol 'PASS' ('Mode={0}; authorized SIDs={1}' -f $a.PolicyMode, $a.PolicySidCount) }
-        elseif ($a.ContainerPresent) { Add-Check $dc $C.Pol 'INFO' 'CN=Cloud not present yet - expected until Set-CloudSyncSOAPolicy.ps1 has been run' }
+        elseif ($a.ContainerPresent) { Add-Check $dc $C.Pol 'INFO' 'CN=Cloud not present yet - expected until Install-SoaToolkit.ps1 -Step Policy has been run' }
         else                         { Add-Check $dc $C.Pol 'WARN' 'CN=Cloud not present (container missing as well)' }
 
         if ($a.ReplFailures.Count)     { Add-Check $dc $C.Repl 'FAIL' ($a.ReplFailures -join ' | ') }
@@ -730,7 +793,7 @@ if (-not $pdcAd -or -not $pdcAd.AdReachable) {
                    (($withoutC | ForEach-Object { Get-ShortName $_.DC }) -join ', ')))
     }
     if ($pdcAd.ContainerOrigin -and $pdcAd.ContainerOrigin -ne $pdcShort) {
-        $diag.Add("Container was originally written on '$($pdcAd.ContainerOrigin)', not on the PDCe '$pdcShort'. It was most likely created by Set-CloudSyncSOAPolicy.ps1 (creates it if missing). Its existence does NOT prove that the enforcement engine on the PDCe is active.")
+        $diag.Add("Container was originally written on '$($pdcAd.ContainerOrigin)', not on the PDCe '$pdcShort'. It was most likely created by Microsoft's Set-CloudSyncSOAPolicy.ps1 (creates it if missing, upstream finding F2). Its existence does NOT prove that the enforcement engine on the PDCe is active.")
     } else {
         $diag.Add("Container was originally written on the PDCe at $($pdcAd.ContainerOriginTime) - consistent with automatic creation by the enforcement engine.")
     }
