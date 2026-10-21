@@ -38,7 +38,8 @@
                       member of the PSO group, read password settings, full control on TestUser only, Event Log Readers
       AllowList       msDS-Settings of CN=Cloud: all agent gMSAs + toolkit gMSA (+ break-glass); stale SIDs reported
       DeployTasks     copies the runtime scripts to every toolkit host (optional code signing), locks the folders,
-                      creates the event log 'SoaToolkit' and registers the tasks:
+                      creates the event log 'SoaToolkit' (EventLogMaxSizeMB, overwrite as needed; NETWORK SERVICE read
+                      access with EventLogAllowWef) and registers the tasks:
                         writable DC : \SoaToolkit\CloudUserConformance-Event    (events 4720 / 5136 by the agent)
                         agent host  : \SoaToolkit\CloudUserConformance-Reconcile (every ReconcileMinutes, staggered)
                         every host  : \SoaToolkit\Monitor                        (every MonitorMinutes)
@@ -60,7 +61,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -89,11 +90,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg      = Import-SoaConfig -Path $ConfigPath
+Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot
+Initialize-SoaReportPath -Config $cfg
 $ctx      = Get-SoaContext
 $Cmdlet   = $PSCmdlet
 $pdc      = $ctx.Pdc
@@ -960,18 +963,23 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 $session = if ($isLocal) { $null } else { New-PSSession -ComputerName $r.Host }
                 try {
                     $prep = {
-                        param($InstallPath, $DataPath, $GmsaSid, $LogName)
+                        param($InstallPath, $DataPath, $GmsaSid, $LogName, $MaxBytes, $AllowWef)
                         if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'RSAT AD PowerShell missing (Install-WindowsFeature RSAT-AD-PowerShell).' }
                         foreach ($p in @($InstallPath, $DataPath, (Join-Path $DataPath 'State'))) { New-Item -Path $p -ItemType Directory -Force | Out-Null }
                         & icacls.exe $InstallPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)RX' -f $GmsaSid) | Out-Null
                         & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)M' -f $GmsaSid) | Out-Null
                         if (-not [Diagnostics.EventLog]::SourceExists($LogName)) { [Diagnostics.EventLog]::CreateEventSource($LogName, $LogName) }
                         # Channel access: SYSTEM full, Administrators read/write/clear, gMSA + batch logons read/write, Event Log Readers read
+                        # (+ NETWORK SERVICE read for Windows Event Forwarding if EventLogAllowWef)
                         $sddl = 'O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)(A;;0x3;;;{0})(A;;0x3;;;S-1-5-3)(A;;0x1;;;S-1-5-32-573)' -f $GmsaSid
+                        if ($AllowWef) { $sddl += '(A;;0x1;;;NS)' }
                         & wevtutil.exe sl $LogName "/ca:$sddl" | Out-Null
-                        'folders locked (Administrators/SYSTEM full, gMSA read+execute on scripts, modify on data); event log ready (gMSA may write)'
+                        # Size and retention: overwrite as needed. A classic log is created with 512 KB and 'overwrite older'
+                        # - when full, new events (heartbeats, failures) would be dropped. The log is also the WEF buffer.
+                        & wevtutil.exe sl $LogName "/ms:$MaxBytes" '/rt:false' '/ab:false' | Out-Null
+                        "folders locked (Administrators/SYSTEM full, gMSA read+execute on scripts, modify on data); event log ready (gMSA may write, $([int64]$MaxBytes / 1MB) MB, overwrite as needed$(if ($AllowWef) { ', readable by NETWORK SERVICE for WEF' }))"
                     }
-                    $prepArgs = @($cfg.ScriptInstallPath, $cfg.DataPath, $gmsa.SID.Value, $cfg.EventLogName)
+                    $prepArgs = @($cfg.ScriptInstallPath, $cfg.DataPath, $gmsa.SID.Value, $cfg.EventLogName, ([int64]$cfg.EventLogMaxSizeMB * 1MB), [bool]$cfg.EventLogAllowWef)
                     $msg = if ($session) { Invoke-Command -Session $session -ScriptBlock $prep -ArgumentList $prepArgs } else { & $prep @prepArgs }
                     Write-SoaLine ADD $msg
                     foreach ($f in @($files) + 'deployment.json') {

@@ -39,7 +39,7 @@
             (1000 change, 1001 warning, 1002 error, 1010 run summary). Exit code 0 = OK, 1 = errors.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Reads and writes go to one DC per run: the local DC on a writable DC, otherwise a discovered writable DC.
 #>
 [CmdletBinding()]
@@ -67,8 +67,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 
 $cfg     = Import-SoaConfig -Path $ConfigPath
 $server  = Select-SoaTargetDc -Preferred $Server

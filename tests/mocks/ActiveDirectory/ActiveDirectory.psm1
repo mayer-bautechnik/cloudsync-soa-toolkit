@@ -8,7 +8,7 @@ $dom = [pscustomobject]@{ DNSRoot = 'fabrikam.local'; NetBIOSName = 'FABRIKAM'; 
 function Get-ADDomain { $dom }
 function Get-ADDomainController { param($Filter, $Server) @([pscustomobject]@{ HostName = 'srv-dc1.fabrikam.local'; Name = 'SRV-DC1'; IsReadOnly = $false; OperatingSystem = 'Windows Server 2025 Datacenter'; OperatingSystemVersion = '10.0 (26100)'; Site = 'Fuerth-HQ' }, [pscustomobject]@{ HostName = 'srv-dc2.fabrikam.local'; Name = 'SRV-DC2'; IsReadOnly = $false; OperatingSystem = 'Windows Server 2025 Datacenter'; OperatingSystemVersion = '10.0 (26100)'; Site = 'Fuerth-HQ' }) }
 function Get-ADRootDSE { param($Server) [pscustomobject]@{ configurationNamingContext = 'CN=Configuration,DC=fabrikam,DC=local'; schemaNamingContext = 'CN=Schema,CN=Configuration,DC=fabrikam,DC=local' } }
-function Get-ADForest { param($Server) [pscustomobject]@{ RootDomain = 'fabrikam.local'; ForestMode = 'Windows2025Forest' } }
+function Get-ADForest { param($Server) [pscustomobject]@{ RootDomain = 'fabrikam.local'; ForestMode = 'Windows2025Forest'; Domains = @('fabrikam.local'); UPNSuffixes = @('fabrikam-group.com') } }
 function Get-ADObject { param($Identity, $Server, $Properties, $LDAPFilter, $SearchBase)
   if ("$Identity" -like 'CN=Cloud,*') { return [pscustomobject]@{ keywords = @('Enforced'); 'msDS-Settings' = @('S-1-5-21-111-222-333-1105', 'S-1-5-21-111-222-333-1110') } }
   [pscustomobject]@{ 'msDS-ExpirePasswordsOnSmartCardOnlyAccounts' = $true } }

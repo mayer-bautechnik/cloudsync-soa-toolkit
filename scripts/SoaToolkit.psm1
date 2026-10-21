@@ -22,7 +22,7 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.3'
+$script:SoaVersion     = '2.0.4'
 $script:SoaReleaseDate = '2026-10-21'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
@@ -159,6 +159,8 @@ $script:SoaConfigDefaults = [ordered]@{
     BatchLogonGpoNameAgent  = 'SOA Toolkit - Agent Hosts - Batch Logon'
     TaskFolder              = '\SoaToolkit\'
     EventLogName            = 'SoaToolkit'
+    EventLogMaxSizeMB       = 64
+    EventLogAllowWef        = $false
     ScriptInstallPath       = 'C:\Program Files\SoaToolkit'
     DataPath                = 'C:\ProgramData\SoaToolkit'
     ReconcileMinutes        = 60
@@ -169,7 +171,7 @@ $script:SoaConfigDefaults = [ordered]@{
     BreakGlassName          = ''
     BreakGlassOU            = ''
     TestUser                = ''
-    ReportPath              = 'C:\ProgramData\SoaToolkit\Reports'
+    ReportPath              = 'C:\SoaToolkitAdmin\Reports'
     KrbtgtAzureAdWarnDays   = 180
     NewUserGraceMinutes     = 120
     RollingTestMinutes      = 15
@@ -220,6 +222,7 @@ function Import-SoaConfig {
     if ([int]$cfg.Pso.MinPasswordLength -gt 255) { $errors += 'Pso.MinPasswordLength must be <= 255.' }
     if ([int]$cfg.Pso.MaxPasswordAgeDays -le 0) { $errors += 'Pso.MaxPasswordAgeDays must be > 0 (automatic rolling needs an expiring password).' }
     if ([int]$cfg.Pso.MaxPasswordAgeDays -gt 60) { Write-Warning 'Pso.MaxPasswordAgeDays > 60: DISA STIG V-243476 requires rotation of SCRIL secrets at least every 60 days.' }
+    if ([int]$cfg.EventLogMaxSizeMB -lt 1 -or [int]$cfg.EventLogMaxSizeMB -gt 4000) { $errors += 'EventLogMaxSizeMB must be between 1 and 4000.' }
     if ([int]$cfg.ReconcileMinutes -lt 0) { $errors += 'ReconcileMinutes must be >= 0 (0 = reconcile task registered but disabled).' }
     $ws = $cfg.WriteScope
     if (-not ($ws -is [array]) -and @('AgentScope', 'Domain') -notcontains "$ws") { $errors += "WriteScope must be 'AgentScope', 'Domain' or an array of distinguished names." }
@@ -227,6 +230,87 @@ function Import-SoaConfig {
 
     $cfg.ConfigPath = (Resolve-Path -LiteralPath $Path).Path
     [pscustomobject]$cfg
+}
+<#
+    Finds the configuration file:
+      1. -ConfigPath, if given
+      2. next to the script (deployed copy on the toolkit hosts; also the layout of toolkit <= 2.0.3)
+      3. one folder up (repository / release layout since 2.0.4: SoaToolkit.config.psd1 at the top level, next to
+         SoaToolkit.config.example.psd1)
+    Two configuration files at 2. and 3. are refused, so that a stale copy is never used silently.
+#>
+function Resolve-SoaConfigPath {
+    param([string]$ConfigPath, [Parameter(Mandatory)][string]$ScriptRoot, [switch]$Optional)
+    if ($ConfigPath) { return $ConfigPath }
+    $name   = 'SoaToolkit.config.psd1'
+    $parent = Split-Path $ScriptRoot -Parent
+    $here   = Join-Path $ScriptRoot $name
+    $up     = if ($parent) { Join-Path $parent $name } else { $null }
+    $found  = @(@($here, $up) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    if ($found.Count -gt 1) { throw "Two configuration files found: '$here' and '$up'. Keep one (recommended: the top-level '$up') or pass -ConfigPath." }
+    if ($found.Count -eq 1) {
+        if ($found[0] -eq $here -and $parent -and (Test-Path -LiteralPath (Join-Path $parent 'SoaToolkit.config.example.psd1'))) {
+            Write-Warning "Configuration found in the scripts folder ($here). Since toolkit 2.0.4 it belongs to the top level of the toolkit folder: move it to $up."
+        }
+        return $found[0]
+    }
+    if ($Optional) { return $null }
+    $example = @(@((Join-Path $ScriptRoot 'SoaToolkit.config.example.psd1'), $(if ($parent) { Join-Path $parent 'SoaToolkit.config.example.psd1' })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }) | Select-Object -First 1
+    $target  = if ($example) { Join-Path (Split-Path $example -Parent) $name } else { $up }
+    throw ("No configuration found. Copy '{0}' to '{1}' and adjust it (docs/SETUP.md), or pass -ConfigPath." -f $(if ($example) { $example } else { 'SoaToolkit.config.example.psd1' }), $target)
+}
+
+# Path containment on Windows paths (case-insensitive, separator-neutral, no file system access)
+function Test-SoaPathInside {
+    param([string]$Path, [string]$Parent)
+    if (-not $Path -or -not $Parent) { return $false }
+    $p = ($Path -replace '/', '\').TrimEnd('\') + '\'
+    $q = ($Parent -replace '/', '\').TrimEnd('\') + '\'
+    $p.StartsWith($q, [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Is this computer part of the solution (a DC or a configured agent host)?
+function Test-SoaToolkitHost {
+    param([Parameter(Mandatory)] $Config)
+    $fq = Get-SoaLocalFqdn
+    $me = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+    if (@(@($Config.AgentHosts) | Where-Object { $_ -and ($_.ToLower() -eq $fq -or (Get-SoaShortName $_) -ieq $me) }).Count) { return $true }
+    try { return ([int](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).DomainRole -ge 4) } catch { return $false }
+}
+
+<#
+    Admin scripts may run on a DC or agent host (no separate PAW). Then two layouts are unsafe:
+      - ReportPath inside DataPath / ScriptInstallPath: DeployTasks gives the toolkit gMSA modify rights on the
+        manifest and the reports, and Uninstall -Step RemoveTasks deletes them in the middle of the rollback
+      - running the admin scripts from the deployed copy (ScriptInstallPath): RemoveTasks deletes it
+    On a toolkit host this stops the script; elsewhere it only warns (harmless there, but the configuration is shared).
+#>
+function Assert-SoaAdminPaths {
+    param([Parameter(Mandatory)] $Config, [Parameter(Mandatory)][string]$ScriptRoot)
+    $problems = @()
+    foreach ($pair in @(@('DataPath', $Config.DataPath), @('ScriptInstallPath', $Config.ScriptInstallPath))) {
+        if (Test-SoaPathInside -Path $Config.ReportPath -Parent $pair[1]) {
+            $problems += "ReportPath '$($Config.ReportPath)' is inside $($pair[0]) '$($pair[1])'. Set ReportPath to a separate folder (default C:\SoaToolkitAdmin\Reports) and move the existing folder there - it contains State\manifest.json."
+        }
+    }
+    if (Test-SoaPathInside -Path $ScriptRoot -Parent $Config.ScriptInstallPath) {
+        $problems += "The script runs from the deployed copy '$ScriptRoot'. Run the admin scripts from your own copy of the toolkit (e.g. C:\SoaToolkitAdmin\cloudsync-soa-toolkit)."
+    }
+    if (-not $problems.Count) { return }
+    if (Test-SoaToolkitHost -Config $Config) { throw ("Unsafe paths on a toolkit host (docs/SETUP.md, 'Without a separate admin workstation'):`n - " + ($problems -join "`n - ")) }
+    foreach ($x in $problems) { Write-Warning "$x (not blocking on this computer, but blocking on a DC or agent host)" }
+}
+
+# Creates ReportPath on first use and restricts it to Administrators and SYSTEM (reports contain names of the environment)
+function Initialize-SoaReportPath {
+    param([Parameter(Mandatory)] $Config)
+    $p = $Config.ReportPath
+    if (-not $p -or (Test-Path -LiteralPath $p)) { return }
+    New-Item -Path $p -ItemType Directory -Force | Out-Null
+    if ($env:OS -eq 'Windows_NT') {
+        & icacls.exe $p /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' | Out-Null
+        Write-Verbose "ReportPath $p created (Administrators and SYSTEM only)"
+    }
 }
 #endregion
 
@@ -267,7 +351,8 @@ function Get-SoaContext {
 function Get-SoaShortName([string]$Fqdn) { ($Fqdn -split '\.')[0] }
 
 function Get-SoaLocalFqdn {
-    try { [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName.ToLower() } catch { $env:COMPUTERNAME.ToLower() }
+    $n = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+    try { [System.Net.Dns]::GetHostEntry($n).HostName.ToLower() } catch { $n.ToLower() }
 }
 
 <#
@@ -1357,6 +1442,35 @@ function ConvertTo-SoaAnonymizedText {
     $Text = [regex]::Replace($Text, '(?i)([A-Z]:\\{1,2}Users\\{1,2})([^\\/\s"'']+)', {
         param($m) if ($m.Groups[2].Value -match '^(Public|Default|All Users|profile\d+|(user|account)\d{3})$') { return $m.Value }; $m.Groups[1].Value + (Get-SoaPseudonym -Anonymizer $a -Kind 'PROFILE' -Original $m.Groups[2].Value.ToLower()) })
     $Text
+}
+
+<#
+    Loads the pseudonyms of earlier reports (cumulative map), so that the same original keeps the same pseudonym in
+    every report created on this workstation. Entries: objects with Kind, Original, Pseudonym (Get-SoaAnonymizerMap).
+#>
+function Import-SoaAnonymizerMap {
+    param([Parameter(Mandatory)] $Anonymizer, [object[]]$Entries)
+    foreach ($e in @($Entries)) {
+        if (-not $e -or -not "$($e.Kind)" -or -not "$($e.Original)") { continue }
+        $kind = "$($e.Kind)"; $orig = "$($e.Original)"; $pseu = "$($e.Pseudonym)"
+        if ($Anonymizer.Map.ContainsKey("$kind|$orig")) { continue }
+        $Anonymizer.Map["$kind|$orig"] = [pscustomobject]@{ Kind = $kind; Original = $orig; Pseudonym = $pseu }
+        if ($kind -ne 'DOMAINDN') { $Anonymizer.Counters[$kind] = 1 + [int]$Anonymizer.Counters[$kind] }
+        if ($kind -in 'DOMAIN', 'DOMAINDN', 'NETBIOS', 'USER', 'GROUP', 'ACCOUNT', 'TERM', 'DC', 'HOST') { $Anonymizer.Terms[$orig] = $pseu }
+        elseif ($kind -eq 'GMSA') { $Anonymizer.Terms[$orig] = $pseu; $Anonymizer.Terms["$orig`$"] = "$pseu`$" }
+    }
+    $Anonymizer.Compiled = $null
+}
+
+<#
+    Reads a terms file (SoaToolkit.terms.txt): one term per line, '#' starts a comment line, empty lines are ignored.
+    The same file serves Export-SoaReport.ps1 (terms to pseudonymize) and tools\Test-SoaRepoHygiene.ps1 (terms that
+    must never appear in the repository).
+#>
+function Read-SoaTermsFile {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+    foreach ($l in (Get-Content -LiteralPath $Path)) { $t = "$l".Trim(); if ($t -and -not $t.StartsWith('#')) { $t } }
 }
 
 function Get-SoaAnonymizerMap {

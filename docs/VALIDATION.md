@@ -2,7 +2,7 @@
 
 The findings K1-K21 describe Microsoft's features and were measured or researched before and during the development of 2.x. This checklist verifies **the toolkit itself** end to end in a lab domain. Until an item is verified, its status below is *open*. The README status section links here.
 
-**Status on 2026-10-21 (release 2.0.3): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
+**Status on 2026-10-21 (release 2.0.4): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
 
 ## How to run it
 
@@ -30,7 +30,7 @@ The findings K1-K21 describe Microsoft's features and were measured or researche
 | L4 | Batch logon GPO keeps existing rights | before / after on every DC and agent host: `secedit /export /cfg c:\temp\ur.inf /areas USER_RIGHTS`, compare `SeBatchLogonRight` | after = before + toolkit gMSA | monitor `BATCH`, then `-Record L4` | open |
 | L5 | KIR GPO, WMI filter, engine per DC | `.\Watch-CloudUserConformance.ps1 -Html` | `DC-NTDSAI`, `DC-KIR`, `DC-LOAD` PASS on every writable DC | monitor report | open |
 | L6 | Audit policy and SACL | `-Step AuditConfig`; remove diagnostic SACLs; `-Step Verify` | `DC-AUDIT`, `AUD-SACL` PASS; no `AUD-SACL-OTHER` | monitor report | open |
-| L7 | Tasks and event log as gMSA | wait one `MonitorMinutes` interval after `DeployTasks` | heartbeat 2000 on every toolkit host | event log of each host | open |
+| L7 | Tasks and event log as gMSA | wait one `MonitorMinutes` interval after `DeployTasks` | heartbeat 2000 on every toolkit host; `EVENTLOG-SIZE` PASS (size, overwrite as needed) | event log of each host, monitor report | open |
 | L8 | New cloud-only user (4720) | create a user in Entra ID, wait for provisioning | event task on the processing DC; target state within minutes | journals + creation time | open |
 | L9 | SOA conversion (5136) | convert the SOA of an existing AD user to the cloud | 5136 on `msDS-ObjectSoa` by the agent gMSA; event task; target state | journals + anchor time + 5136 counts | open |
 | L10 | Reconcile repairs drift | `.\Test-SoaBehavior.ps1 -Suite Onboarding` | target state restored | test results | open |

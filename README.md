@@ -4,7 +4,7 @@
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.3 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.0.4 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -149,7 +149,14 @@ There is **no single point of failure in the toolkit**. Without rotation, every 
 
 ## Repository layout
 
-All scripts are in `scripts/` and share `SoaToolkit.psm1` (functions) and `SoaToolkit.config.psd1` (configuration).
+The only files you edit are at the top level, as copies of two templates. Your copies are git-ignored and not part of the release zip, so updates never overwrite them:
+
+| Template | Your copy | Content |
+|---|---|---|
+| `SoaToolkit.config.example.psd1` | `SoaToolkit.config.psd1` | configuration (placeholders: `contoso.com`); `DeployTasks` copies it to every toolkit host |
+| `SoaToolkit.terms.example.txt` | `SoaToolkit.terms.txt` | names that `Export-SoaReport.ps1` pseudonymizes (and that maintainers keep out of the repository) |
+
+All scripts are in `scripts/` and share `SoaToolkit.psm1` (functions).
 
 | Script | Purpose | Writes |
 |---|---|---|
@@ -163,7 +170,6 @@ All scripts are in `scripts/` and share `SoaToolkit.psm1` (functions) and `SoaTo
 | `Set-SoaDiagnosticsGpo.ps1` | Diagnostics GPO (can also be used on its own) | GPO |
 | `Export-SoaReport.ps1` | Validation / bug report: collect, anonymize, review, package | report folder only |
 | `SoaToolkit.psm1` | Shared functions | – |
-| `SoaToolkit.config.psd1` | Configuration (placeholders: `contoso.com`) | – |
 
 Outside `scripts/`: `tools/` (static checks, security claims, hygiene, release build), `tests/` (tests without a domain, incl. an end-to-end test against a mocked AD module), `docs/src/` (source of the PDF), `.github/` (CI, issue templates, release notes).
 
@@ -172,7 +178,9 @@ Naming scheme: `Soa*` = toolkit, infrastructure and Microsoft's feature. `CloudU
 ## Quick start
 
 ```powershell
-# admin workstation, Domain Admin, RSAT; scripts\SoaToolkit.config.psd1 adjusted (see docs/SETUP.md)
+# admin workstation (or a DC / agent host, see docs/SETUP.md), Domain Admin, RSAT
+# once: copy SoaToolkit.config.example.psd1 to SoaToolkit.config.psd1 (top level) and adjust it; same for the terms file
+cd .\scripts
 .\Test-SoaPrerequisites.ps1
 .\Install-SoaToolkit.ps1 -Step All -KirMsi2025 C:\Install\AD-Enforcement-WS2025.msi -WhatIf
 .\Install-SoaToolkit.ps1 -Step All -KirMsi2025 C:\Install\AD-Enforcement-WS2025.msi -Refresh
@@ -276,7 +284,7 @@ These findings have not been reported upstream yet. If you can reproduce them, c
 |---|---|
 | Findings about Microsoft's features (K1-K21) | *Documented* findings link their sources. *Observed* findings were measured **manually by the maintainer** in a lab domain ([docs/EVIDENCE.md](docs/EVIDENCE.md); completing the records with dates and builds is in progress) |
 | Static quality of the 2.x scripts | parser, PSScriptAnalyzer (PowerShell 5.1 and 7 syntax), unit tests, an end-to-end test of the report tool against a mocked AD module, and the security-claim checker. They run in CI on every change |
-| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.3 (2026-10-21) |
+| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.4 (2026-10-21) |
 
 Open items of the lab validation ([docs/VALIDATION.md](docs/VALIDATION.md)):
 

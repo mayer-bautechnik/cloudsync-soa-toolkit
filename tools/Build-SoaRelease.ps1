@@ -29,7 +29,7 @@
     Do not ask GitHub for the CI result of the commit. Only when the GitHub CLI is not available - verify CI manually.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Run tools\Invoke-SoaStaticChecks.ps1 first. See docs/RELEASING.md.
 #>
 [CmdletBinding()]
@@ -76,7 +76,8 @@ if ($inGit) {
     } finally { Pop-Location }
 } else {
     Write-Warning 'Not a git work tree - packaging the folder content (export-ignore emulated).'
-    $exclude = '^(\.git|\.github[\\/]assets|reports|.*\.local\..*|.*\.zip|.*\.sha256)([\\/]|$)'
+    # export-ignore and local files (your configuration, terms, pseudonym maps are never part of a release)
+    $exclude = '^(\.git|\.github[\\/]assets|reports|.*\.local\..*|.*\.zip|.*\.sha256|SoaToolkit\.config\.psd1|scripts[\\/]SoaToolkit\.config\.psd1|SoaToolkit\.config\.(?!example\.).+\.psd1|(?!.*\.example\.txt$).*\.terms\.txt|.*forbidden-terms.*\.txt|.*\.map\.csv|.*pseudonyms\.csv)([\\/]|$)'
     foreach ($f in (Get-ChildItem -LiteralPath $root -Recurse -File -Force)) {
         $rel = $f.FullName.Substring($root.Length).TrimStart('\', '/')
         if ($rel -match $exclude) { continue }

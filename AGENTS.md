@@ -18,7 +18,8 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 
 ## Layout
 
-- `scripts/`: the toolkit. `SoaToolkit.psm1` holds the shared functions; every script imports it. `SoaToolkit.config.psd1` is the template configuration and contains only `contoso.com` placeholders.
+- Top level: `SoaToolkit.config.example.psd1` and `SoaToolkit.terms.example.txt`, the only templates users copy and edit. They contain only `contoso.com` placeholders. The copies `SoaToolkit.config.psd1` and `SoaToolkit.terms.txt` are git-ignored and must never be committed.
+- `scripts/`: the toolkit. `SoaToolkit.psm1` holds the shared functions; every script imports it. Configuration lookup: `-ConfigPath`, then next to the script (deployed hosts), then the top level (`Resolve-SoaConfigPath`).
 - `tools/`: developer tools. They are not deployed to the hosts. Included: static checks, security claims, hygiene, release build.
 - `tests/`: tests that need no domain. They include a mocked `ActiveDirectory` module with the fictitious domain `fabrikam.local`.
 - `docs/`: documentation. `docs/src/build_findings_pdf.py` is the source of `docs/Consolidated-Findings.pdf`.
@@ -36,7 +37,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
    ACEs and SACL entries are identified by their exact fingerprint (`Test-SoaSaclFingerprint`).
 4. **Idempotent and reversible.** Every write path supports `-WhatIf`, writes only on deviation and keeps the first previous value in the manifest. SCRIL is never removed automatically.
 5. **Scope.** Users are in scope only when they have the anchor `User_*` **and** `msDS-ObjectSoa = Cloud`. Non-LDAP and DC-internal write paths are out of scope (decision D-15).
-6. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses. Reports from environments enter the repository only as reviewed, anonymized `Export-SoaReport.ps1` output (docs/evidence/), never raw. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep extra terms in `tools/forbidden-terms.local.txt` (git-ignored).
+6. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses. Reports from environments enter the repository only as reviewed, anonymized `Export-SoaReport.ps1` output (docs/evidence/), never raw. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep their identifiers in `SoaToolkit.terms.txt` (git-ignored); the hygiene check H5 blocks them.
 7. **Conventions.**
    - Admin-facing text is English.
    - PowerShell files are UTF-8 with BOM and CRLF; Markdown, HTML, YAML and Python use LF.

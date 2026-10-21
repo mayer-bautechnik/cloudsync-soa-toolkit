@@ -52,7 +52,7 @@
     .\Test-SoaPrerequisites.ps1 -EnforcementOnly -KirGpoName 'DC - KIR AD Object Enforcement'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Complements Microsoft's Check-CloudSyncSOAPolicy.ps1, which only reads the domain-wide objects and the local
     diagnostics value and does not verify the enforcement engine per DC (upstream finding F3).
     Run as Domain Admin from the admin workstation with RSAT. WinRM (5985) and ADWS (9389) to every writable DC.
@@ -69,12 +69,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot -Optional
 $cfg = $null
 if (-not $EnforcementOnly) {
-    if (Test-Path -LiteralPath $ConfigPath) { $cfg = Import-SoaConfig -Path $ConfigPath }
-    else { Write-Warning "No configuration at $ConfigPath - only the AD object enforcement checks (part B) are run." }
+    if ($ConfigPath) { $cfg = Import-SoaConfig -Path $ConfigPath; Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot; Initialize-SoaReportPath -Config $cfg }
+    else { Write-Warning "No configuration found (SoaToolkit.config.psd1) - only the AD object enforcement checks (part B) are run." }
 }
 if (-not $OutputPath) {
     $OutputPath = if ($cfg) { Join-Path $cfg.ReportPath ('Prerequisites\{0:yyyyMMdd_HHmm}' -f (Get-Date)) } else { Join-Path ([Environment]::GetFolderPath('Desktop')) ('SOA-Preflight_{0:yyyyMMdd_HHmm}' -f (Get-Date)) }

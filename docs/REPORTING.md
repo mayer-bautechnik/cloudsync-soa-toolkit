@@ -17,7 +17,7 @@ flowchart LR
 | Phase | Command | Result |
 |---|---|---|
 | Record a manual result | `.\Export-SoaReport.ps1 -Record L16 -Result PASS -Note '...'` | `<ReportPath>\Validation\manual-results.json` |
-| Collect (validation) | `.\Export-SoaReport.ps1 [-AdditionalTerms 'Contoso','Springfield']` | `<ReportPath>\Export\SoaReport_Validation_<time>\` |
+| Collect (validation) | `.\Export-SoaReport.ps1` (`SoaToolkit.terms.txt` is loaded automatically; `-AdditionalTerms` for one-off names) | `<ReportPath>\Export\SoaReport_Validation_<time>\` |
 | Collect (bug report) | `.\Export-SoaReport.ps1 -Purpose BugReport -Description '...' -Days 7` | `...\SoaReport_BugReport_<time>\` |
 | Package | `.\Export-SoaReport.ps1 -Package <folder>` | `<folder>.zip`, `<folder>.zip.sha256` |
 | List the checks | `.\Export-SoaReport.ps1 -ListChecks` | console |
@@ -54,10 +54,15 @@ The same original always gets the same pseudonym within one report.
 | domain SIDs | `S-1-5-21-1000000000-0-0-<RID>` (RIDs stay, e.g. 512) |
 | GUIDs | `00000000-0000-4000-8000-...` (the schema / audit / CSE GUIDs of the toolkit stay) |
 | e-mail addresses, IPv4 addresses, user profile paths | `mail001@example.invalid`, `192.0.2.x`, `C:\Users\profile01` |
-| AD site names and your `-AdditionalTerms` / `-TermsFile` | `term001` ... |
+| UPN suffixes and further domains of the forest (typically the public mail domain) | `domain2.example` ... |
+| AD site names, the entries of `SoaToolkit.terms.txt` and `-AdditionalTerms` / `-TermsFile` | `term001` ... |
+
+**Your terms file.** Names the toolkit cannot find in AD go into `SoaToolkit.terms.txt` at the top level of the toolkit folder, next to `SoaToolkit.config.psd1`. Examples: company and brand names, mail domains that are not UPN suffixes, the Entra tenant name, cities and sites, naming prefixes, projects, person names. Start from the template `SoaToolkit.terms.example.txt`, which lists the categories. The file is loaded automatically, one term per line, `#` for comments. It is git-ignored and never part of a release. Maintainers use the same file for the repository hygiene check (H5), so a name is maintained in one place only.
+
+**Stable pseudonyms.** The map of every report is added to `<OutputPath>\private\pseudonyms.csv`. The next report reuses it, so `dc02` or `user004` mean the same object in every report from this workstation, for example in a lab report and a later bug report. `-ResetPseudonyms` starts a new map.
 
 **Limits:**
-- The script can only replace names it knows. Company, product, project, city and person names in free text (for example in notes or descriptions) must be added with `-AdditionalTerms`. That is why phase 2 is a human review.
+- The script can only replace names it knows (AD data and your terms file). Names in free text, for example in notes or descriptions, need an entry in the terms file. That is why phase 2 is a human review.
 - OS builds and versions stay. They are needed for the analysis.
 - Four-part version numbers whose parts are all ≤ 255 may be shown as `192.0.2.x`.
 
@@ -70,7 +75,7 @@ The same original always gets the same pseudonym within one report.
 ## Review checklist (also in README-FIRST.md)
 
 1. Does `report.md` match what you did?
-2. Search all files for company, product, project, site, city and person names, internal URLs and IP ranges. If you find any, collect again with `-AdditionalTerms`.
+2. Search all files for company, product, project, site, city and person names, internal URLs and IP ranges. If you find any, add them to `SoaToolkit.terms.txt` and collect again.
 3. Look at `artifacts\SoaToolkit.config.psd1` and `artifacts\manifest.json` (OU and group names).
 4. Delete files you do not want to share. The report stays usable.
 5. Package.

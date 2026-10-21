@@ -1,0 +1,42 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+#
+# TEMPLATE - copy this file to 'SoaToolkit.terms.txt' in the same folder (top level of the toolkit folder) and replace
+# the examples with the names of YOUR environment. The copy is git-ignored and not part of the release zip.
+#
+# Format: one term per line; lines starting with # are comments; matching is case-insensitive and on whole words
+# (a term is not replaced inside a longer word - add variants such as "Contoso-HQ" separately if needed).
+#
+# Used by:
+#   scripts\Export-SoaReport.ps1     - every term is replaced by a pseudonym (term001, term002 ...) in reports
+#   tools\Test-SoaRepoHygiene.ps1    - maintainers: no term may appear in the repository (check H5)
+#
+# Found automatically (no need to list them here): AD domain and forest domains, NetBIOS name, UPN suffixes,
+# domain controllers, agent hosts, this workstation, AD sites, agent gMSAs, the account running the export, users
+# that appear in the toolkit data, OU / CN values in distinguished names, SIDs, GUIDs, e-mail and IPv4 addresses.
+# List what the toolkit cannot know:
+
+# --- Organisation: legal name, brand, short names, abbreviations
+Contoso
+Contoso Ltd
+CTSO
+
+# --- Public / mail domains that are NOT UPN suffixes, Entra tenant name
+contoso-mail.com
+contoso.onmicrosoft.com
+
+# --- Locations: cities, sites, buildings (AD site names are found automatically)
+Springfield
+Shelbyville
+
+# --- Naming prefixes of servers / groups / service accounts that reveal the organisation
+CTS-SRV
+GRP-CTS
+
+# --- Projects, products, customers, internal application names
+Project Phoenix
+
+# --- Person names that may appear in notes or descriptions (users in AD data are found automatically)
+Jane Example

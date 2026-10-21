@@ -14,9 +14,15 @@ rolling-baseline.json
 test-state.json
 behavior-findings.json
 
-# Local configuration copies (keep the template scripts/SoaToolkit.config.psd1 with placeholders)
-*.local.psd1
+# Your configuration and terms (templates: SoaToolkit.config.example.psd1, SoaToolkit.terms.example.txt)
+SoaToolkit.config.psd1
 SoaToolkit.config.*.psd1
+!SoaToolkit.config.example.psd1
+*.local.psd1
+*.terms.txt
+*terms*.local.txt
+forbidden-terms*.txt
+!*.example.txt
 
 # Export-SoaReport.ps1 output (report folders, private pseudonym maps) and local-only files
 Export/
@@ -24,8 +30,8 @@ Validation/
 SoaReport_*/
 private/
 *.map.csv
+pseudonyms.csv
 *.local.txt
-tools/forbidden-terms.local.txt
 
 # Release packages and signing material
 *.zip

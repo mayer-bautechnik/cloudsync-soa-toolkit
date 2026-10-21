@@ -59,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.
@@ -83,8 +83,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 
 if (-not $Step -and -not $Preset) { throw 'Pass -Step and/or -Preset Decommission|Full.' }
 $presets = @{
@@ -98,6 +98,8 @@ $order = 'SetModeAudit', 'StopTasks', 'RevertUsers', 'RemovePso', 'RemoveAllowLi
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg      = Import-SoaConfig -Path $ConfigPath
+Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot
+Initialize-SoaReportPath -Config $cfg
 $ctx      = Get-SoaContext
 $pdc      = $ctx.Pdc
 $Cmdlet   = $PSCmdlet

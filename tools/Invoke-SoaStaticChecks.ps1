@@ -15,7 +15,7 @@
     (powershell.exe), because the scheduled tasks use 5.1.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Exit code 0 = all checks passed.
 #>
 [CmdletBinding()]

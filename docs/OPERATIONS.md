@@ -156,19 +156,66 @@ Enforced mode freezes **marked user objects** against LDAP changes by identities
 | Exit code | 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention) |
 | Files | `DataPath\Status\monitor.json`, `conformance.json`; interactive: CSV / JSON / HTML in `ReportPath\Monitor` |
 
-### Integration
+### Central collection
 
-- **Azure Monitor Agent + data collection rule** on the `SoaToolkit` channel, then Log Analytics / Microsoft Sentinel. Analytics rules on 2002, and on the missing 2000 heartbeat per computer for more than 2 × `MonitorMinutes`.
-- **Checkmk / PRTG / Zabbix / SCOM**: event-log monitoring of the channel, or a script sensor calling `Watch-CloudUserConformance.ps1 -Scope Local -Quiet` (exit code).
-- **Windows Event Forwarding** to a collector.
-- Domain-wide checks run on several hosts on purpose (no single point of failure). Deduplicate by `CheckId` + objects.
+Every toolkit host writes to its **own** `SoaToolkit` log. "Toolkit host" means every writable DC and every agent host; there is no extra monitoring server. Collect the logs centrally and alert there.
+
+| Event | Meaning | Alert |
+|---|---|---|
+| 2000 | monitor heartbeat (overall status, counts) | **missing** for more than 2 × `MonitorMinutes` + 30 min per computer |
+| 2002 / 2001 | check failed / warning (one event per check; JSON line with `CheckId`, `Status`, `Objects`) | 2002 always; 2001 as a ticket |
+| 1002 / 1001 | conformance error / warning | 1002 always |
+| 1000, 1010 | user brought into the target state, run summary | – (audit trail) |
+| 3000-3102 | install / uninstall steps | – (audit trail) |
+| Directory Service 3097 / 3098 | write would be blocked (Audit) / was blocked (Enforced) | review during the audit phase; 3098 always |
+
+Domain-wide checks run on several agent hosts on purpose (no single point of failure). Deduplicate them by `CheckId` + objects.
+
+**Microsoft-native options:**
+
+| Option | Configuration |
+|---|---|
+| **Windows Event Forwarding (WEF) → Windows Event Collector (WEC)** (on-premises, no extra cost) | <ul><li>Source-initiated subscription.</li><li>GPO on the DC OU and the agent-host OU: *Computer Configuration → Administrative Templates → Windows Components → Event Forwarding → Configure target Subscription Manager*, e.g. `Server=http://wec01.contoso.com:5985/wsman/SubscriptionManager/WEC,Refresh=60`. The WinRM service must run.</li><li>Read access for NETWORK SERVICE: set `EventLogAllowWef = $true` and run `DeployTasks` (this log only), or add NETWORK SERVICE to *Event Log Readers* as Microsoft's WEF guidance does (that also opens the Security log).</li><li>Subscription ACL: the group **`SOA-Toolkit-Hosts`**, which contains exactly the toolkit hosts.</li><li>Query: see below.</li><li>The WEC receives DC events and is therefore **Tier 0**.</li></ul> |
+| **Azure Monitor Agent (AMA) + data collection rule → Log Analytics / Microsoft Sentinel** | <ul><li>On-premises servers need Azure Arc.</li><li>XPath entries in the DCR: `SoaToolkit!*` and `Directory Service!*[System[(EventID=3095 or EventID=3097 or EventID=3098)]]`. Target table: `Event`.</li><li>**Arc on DCs makes Arc and the Azure RBAC on those resources part of Tier 0**: whoever may deploy extensions or use Run Command controls the DCs.</li></ul> |
+| **Combination (recommended for few DCs):** WEF to a WEC, AMA only on the WEC | Arc on one Tier-0 system instead of all DCs; Sentinel collects the forwarded events from the WEC |
+| **System Center Operations Manager** | event rules / monitors on the `SoaToolkit` log; or a script monitor calling `Watch-CloudUserConformance.ps1 -Scope Local -Quiet` (exit code 0/1/2) |
+
+Third-party monitoring (Checkmk, PRTG, Zabbix …) works the same way: event-log monitoring of the channel, or the script sensor with the exit code.
+
+WEF subscription query:
+
+```xml
+<QueryList>
+  <Query Id="0">
+    <Select Path="SoaToolkit">*</Select>
+    <Select Path="Directory Service">*[System[(EventID=3095 or EventID=3097 or EventID=3098)]]</Select>
+  </Query>
+</QueryList>
+```
+
+KQL (Log Analytics / Sentinel):
+
+```kusto
+// missing heartbeat (MonitorMinutes = 60)
+Event
+| where EventLog == "SoaToolkit" and EventID == 2000
+| summarize LastHeartbeat = max(TimeGenerated) by Computer
+| where LastHeartbeat < ago(150m)
+
+// failures
+Event
+| where EventLog == "SoaToolkit" and EventID in (1002, 2002)
+| project TimeGenerated, Computer, EventID, RenderedDescription
+```
+
+The local log is also the buffer for forwarding: events that are overwritten before they are collected are lost without notice. `DeployTasks` therefore sets `EventLogMaxSizeMB` (default 64 MB) with "overwrite as needed". A classic log would otherwise be created with 512 KB and "overwrite older", and drop new events when full. The monitor check `EVENTLOG-SIZE` verifies the setting.
 
 ### Check catalogue (selection)
 
 | CheckId | Meaning |
 |---|---|
 | `DC-NTDSAI`, `DC-KIR`, `DC-DIAG`, `DC-LOAD`, `DC-3097`, `DC-3098`, `DC-AUDIT` | enforcement engine and logging per DC |
-| `TASK-*`, `RECON-STATUS`, `CONF-ERRORS`, `INTEGRITY`, `SIGNATURE`, `BATCH`, `EVENTLOG` | toolkit runtime per host |
+| `TASK-*`, `RECON-STATUS`, `CONF-ERRORS`, `INTEGRITY`, `SIGNATURE`, `BATCH`, `EVENTLOG`, `EVENTLOG-SIZE` | toolkit runtime per host (incl. size and retention of the `SoaToolkit` log) |
 | `AGENT-SVC` | provisioning agent service |
 | `POL-*` | policy present, mode, allow-list resolvable, agents + toolkit allow-listed, replicated |
 | `ROLL`, `PSO-*` | automatic rolling, PSO values / target / precedence |

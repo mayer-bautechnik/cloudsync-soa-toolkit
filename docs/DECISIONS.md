@@ -24,6 +24,9 @@ Short records of the decisions that shape the toolkit: context, decision, altern
 | D-18 | Optional code signing, tasks then run with `AllSigned` | 2.0.0 |
 | D-19 | Environment data leaves only anonymized, after human review | 2.0.2 |
 | D-20 | Security claims are checked by a tool, not only documented | 2.0.2 |
+| D-21 | User-edited files are templates at the top level; the copies are never versioned or shipped | 2.0.4 |
+| D-22 | Admin data (`ReportPath`) is separated from runtime data (`DataPath`) | 2.0.4 |
+| D-23 | The toolkit sizes its own event log; central collection with Microsoft-native means | 2.0.4 |
 
 ---
 
@@ -134,3 +137,27 @@ Short records of the decisions that shape the toolkit: context, decision, altern
 
 ### D-20 Security claims are checked by a tool, not only documented
 - **Decision:** S1-S5 are checked statically by `tools/Test-SoaSecurityClaims.ps1` in CI. The checker also prints an inventory of all write operations for reviewers, human or AI.
+
+### D-21 User-edited files are templates at the top level; the copies are never versioned or shipped
+- **Context:** Up to 2.0.3, `scripts\SoaToolkit.config.psd1` was the template and the user's configuration at the same time. An update overwrote it, a maintainer could commit real values, and the integrity check could not tell a template from a configuration.
+- **Decision:**
+  - `SoaToolkit.config.example.psd1` and `SoaToolkit.terms.example.txt` are at the top level. Users copy them to `SoaToolkit.config.psd1` / `SoaToolkit.terms.txt`; the copies are git-ignored and not in the release zip.
+  - The scripts look for the configuration at `-ConfigPath`, then next to the script (deployed hosts, old layout), then at the top level. Two configurations at once are refused.
+  - One terms file serves both report pseudonyms and repository hygiene.
+- **Rejected:**
+  - Configuration in the user profile or registry: not visible, hard to review.
+  - Moving `PSScriptAnalyzerSettings.psd1`: the top level is the VS Code / PSScriptAnalyzer default.
+
+### D-22 Admin data (`ReportPath`) is separated from runtime data (`DataPath`)
+- **Context:** The default `ReportPath` was inside `DataPath`. On a toolkit host (no separate admin workstation) this had two effects: `DeployTasks` gave the toolkit gMSA modify rights on the manifest that a Domain Admin later executes during uninstall, and `RemoveTasks` deleted manifest and reports during the rollback.
+- **Decision:**
+  - Default `ReportPath = C:\SoaToolkitAdmin\Reports`, created with access for Administrators and SYSTEM only.
+  - The admin scripts refuse to run on a DC / agent host when `ReportPath` is inside `DataPath` or `ScriptInstallPath`, or when they run from the deployed copy (`Assert-SoaAdminPaths`).
+
+### D-23 The toolkit sizes its own event log; central collection with Microsoft-native means
+- **Context:** A classic log created by `CreateEventSource` has 512 KB and "overwrite older". When it is full, new events can be dropped, and the local log is also the buffer of Windows Event Forwarding.
+- **Decision:**
+  - `DeployTasks` sets `EventLogMaxSizeMB` (default 64) with "overwrite as needed"; the monitor checks it (`EVENTLOG-SIZE`).
+  - Optional read access for NETWORK SERVICE on this log only (`EventLogAllowWef`).
+  - Documented collection paths: WEF/WEC with `SOA-Toolkit-Hosts` as subscription ACL, AMA/DCR, both combined, SCOM.
+- **Rejected:** adding NETWORK SERVICE to *Event Log Readers* by the toolkit. That opens the Security log as well; it stays the operator's decision.

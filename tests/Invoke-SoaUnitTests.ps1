@@ -17,7 +17,7 @@
     Child processes are used where mocks must not leak into the main test scope.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Exit code = number of failed assertions (0 = all passed).
 #>
 [CmdletBinding()]
@@ -35,7 +35,7 @@ $exe = (Get-Process -Id $PID).Path
 try {
 # Config
 $tmpCfg = Join-Path $tmp 'cfg.psd1'
-(Get-Content (Join-Path (Join-Path $repo 'scripts') 'SoaToolkit.config.psd1') -Raw) -replace 'C:\\ProgramData\\SoaToolkit\\Reports', ((Join-Path $tmp 'reports') -replace "'", "''") | Set-Content $tmpCfg
+(Get-Content (Join-Path $repo 'SoaToolkit.config.example.psd1') -Raw) -replace 'C:\\SoaToolkitAdmin\\Reports', ((Join-Path $tmp 'reports') -replace "'", "''") | Set-Content $tmpCfg
 $cfg = Import-SoaConfig -Path $tmpCfg
 Assert-Test ($cfg.Pso.MinPasswordLength -eq 64) 'config PSO min length 64'
 Assert-Test ($cfg.Pso.MaxPasswordAgeDays -eq 30) 'config PSO max age 30'
@@ -169,6 +169,34 @@ Assert-Test ((ConvertTo-SoaAnonymizedText -Anonymizer $an -Text 'jdoe') -eq (Con
 Assert-Test (@(Find-SoaResidualIdentifier -Anonymizer $an -Text $out).Count -eq 0) 'leak check is clean on anonymized text'
 Assert-Test (@(Find-SoaResidualIdentifier -Anonymizer $an -Text "$out srv-dc1").Count -ge 1) 'leak check finds a remaining original value'
 Assert-Test (@(Find-SoaResidualIdentifier -Anonymizer $an -Text ('x' + '@' + 'contoso-real.de S-1-5-21-9-9-9')).Count -eq 2) 'leak check finds unknown e-mail addresses and domain SIDs'
+
+# Configuration lookup, path guard, terms file, cumulative pseudonym map
+$lay = Join-Path $tmp 'layout'; $laySc = Join-Path $lay 'scripts'; New-Item -Path $laySc -ItemType Directory -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $lay 'SoaToolkit.config.example.psd1') -Value '@{}'
+$noCfg = $false; try { Resolve-SoaConfigPath -ScriptRoot $laySc | Out-Null } catch { $noCfg = $_.Exception.Message -match 'SoaToolkit\.config\.example\.psd1' }
+Assert-Test $noCfg 'no configuration: the message names the template to copy'
+Set-Content -LiteralPath (Join-Path $lay 'SoaToolkit.config.psd1') -Value '@{}'
+Assert-Test ((Resolve-SoaConfigPath -ScriptRoot $laySc) -eq (Join-Path $lay 'SoaToolkit.config.psd1')) 'configuration found at the top level'
+Set-Content -LiteralPath (Join-Path $laySc 'SoaToolkit.config.psd1') -Value '@{}'
+$two = $false; try { Resolve-SoaConfigPath -ScriptRoot $laySc | Out-Null } catch { $two = $_.Exception.Message -match 'Two configuration files' }
+Assert-Test $two 'two configuration files are refused'
+Remove-Item -LiteralPath (Join-Path $lay 'SoaToolkit.config.psd1')
+Assert-Test ((Resolve-SoaConfigPath -ScriptRoot $laySc 3>$null) -eq (Join-Path $laySc 'SoaToolkit.config.psd1')) 'configuration next to the script (hosts, layout <= 2.0.3) still works'
+Assert-Test ($null -eq (Resolve-SoaConfigPath -ScriptRoot (Join-Path $tmp 'nothing') -Optional)) 'optional lookup returns nothing'
+Assert-Test (Test-SoaPathInside -Path 'C:\ProgramData\SoaToolkit\Reports' -Parent 'c:/programdata/soatoolkit/') 'path containment: inside (case and separators ignored)'
+Assert-Test (-not (Test-SoaPathInside -Path 'C:\ProgramData\SoaToolkitAdmin\Reports' -Parent 'C:\ProgramData\SoaToolkit')) 'path containment: sibling with common prefix is not inside'
+$guardCfg = [pscustomobject]@{ ReportPath = 'C:\ProgramData\SoaToolkit\Reports'; DataPath = 'C:\ProgramData\SoaToolkit'; ScriptInstallPath = 'C:\Program Files\SoaToolkit'; AgentHosts = @('somewhere.contoso.com') }
+$w = @(Assert-SoaAdminPaths -Config $guardCfg -ScriptRoot $laySc 3>&1)
+Assert-Test ($w.Count -ge 1 -and "$($w[0])" -match 'inside DataPath') 'ReportPath inside DataPath is reported (warning off a toolkit host)'
+$guardCfg.AgentHosts = @([Environment]::MachineName)
+$blocked = $false; try { Assert-SoaAdminPaths -Config $guardCfg -ScriptRoot $laySc } catch { $blocked = $true }
+Assert-Test $blocked 'ReportPath inside DataPath stops the script on a toolkit host'
+$tf = Join-Path $tmp 't.txt'; Set-Content -LiteralPath $tf -Value @('# comment', '', '  Springfield  ', 'Contoso Ltd')
+Assert-Test ((@(Read-SoaTermsFile -Path $tf) -join '|') -eq 'Springfield|Contoso Ltd') 'terms file: comments and empty lines ignored, trimmed'
+$a1 = New-SoaAnonymizer; Add-SoaAnonymizerTerm -Anonymizer $a1 -Kind DC -Value 'srv-a.fabrikam.local'; Add-SoaAnonymizerTerm -Anonymizer $a1 -Kind DC -Value 'srv-b.fabrikam.local'
+$a2 = New-SoaAnonymizer; Import-SoaAnonymizerMap -Anonymizer $a2 -Entries @(Get-SoaAnonymizerMap -Anonymizer $a1)
+Add-SoaAnonymizerTerm -Anonymizer $a2 -Kind DC -Value 'srv-c.fabrikam.local'; Add-SoaAnonymizerTerm -Anonymizer $a2 -Kind DC -Value 'srv-b.fabrikam.local'
+Assert-Test ((ConvertTo-SoaAnonymizedText -Anonymizer $a2 -Text 'srv-b srv-c') -eq 'dc02 dc03') 'imported map keeps pseudonyms and continues the numbering'
 
 # Security claims checker must detect violations
 $bad = Join-Path $tmp 'claims'; New-Item -Path $bad -ItemType Directory -Force | Out-Null

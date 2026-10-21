@@ -51,7 +51,12 @@
     Further names to replace (company, site, project names ...). Replaced as TERM-n.
 
 .PARAMETER TermsFile
-    Text file with one additional term per line (lines starting with # are ignored).
+    Additional text file with one term per line (lines starting with # are ignored). SoaToolkit.terms.txt next to the
+    configuration file is always loaded (template: SoaToolkit.terms.example.txt).
+
+.PARAMETER ResetPseudonyms
+    Start a new pseudonym map. By default the map of earlier reports (<OutputPath>\private\pseudonyms.csv) is reused,
+    so that the same DC, user or OU has the same pseudonym in every report from this workstation.
 
 .PARAMETER NoAnonymize
     Writes the original values (for internal use only). The folder is marked NOT ANONYMIZED and -Package refuses it
@@ -71,12 +76,13 @@
 
 .EXAMPLE
     .\Export-SoaReport.ps1 -ListChecks
+    .\Export-SoaReport.ps1                                    # SoaToolkit.terms.txt next to the configuration is loaded automatically
     .\Export-SoaReport.ps1 -AdditionalTerms 'Contoso', 'Springfield'
     .\Export-SoaReport.ps1 -Purpose BugReport -Description 'Event task does not start on dc02 after 4720' -Days 7
-    .\Export-SoaReport.ps1 -Package 'C:\ProgramData\SoaToolkit\Reports\Export\SoaReport_Validation_20261121_0930'
+    .\Export-SoaReport.ps1 -Package 'C:\SoaToolkitAdmin\Reports\Export\SoaReport_Validation_20261121_093015'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT, WinRM to the toolkit hosts). See docs/REPORTING.md.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Collect', SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -89,6 +95,7 @@ param(
     [Parameter(ParameterSetName = 'Collect')][switch] $NoAnonymize,
     [Parameter(ParameterSetName = 'Collect')][switch] $NoRemote,
     [Parameter(ParameterSetName = 'Collect')][switch] $ExcludeUserDetails,
+    [Parameter(ParameterSetName = 'Collect')][switch] $ResetPseudonyms,
 
     [Parameter(ParameterSetName = 'Record', Mandatory = $true)][ValidatePattern('^(L([1-9]|1[0-9]|20)|NOTE)$')][string] $Record,
     [Parameter(ParameterSetName = 'Record', Mandatory = $true)][ValidateSet('PASS', 'FAIL', 'WARN', 'SKIP', 'N/A', 'INFO')][string] $Result,
@@ -105,7 +112,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking -Verbose:$false
 
 #region --- Validation catalogue (keep in sync with docs/VALIDATION.md) -------------------------------
@@ -137,7 +143,10 @@ if ($PSCmdlet.ParameterSetName -eq 'List') {
 }
 #endregion
 
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 $cfg = Import-SoaConfig -Path $ConfigPath
+Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot
+Initialize-SoaReportPath -Config $cfg
 if (-not $OutputPath) { $OutputPath = Join-Path $cfg.ReportPath 'Export' }
 $manualPath = Join-Path (Join-Path $cfg.ReportPath 'Validation') 'manual-results.json'
 
@@ -187,7 +196,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Package') {
 
 #region --- Phase: collect ---------------------------------------------------------------------------
 $since = (Get-Date).AddDays(-$Days)
-$stamp = Get-Date -Format 'yyyyMMdd_HHmm'
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $bundleName = "SoaReport_{0}_{1}" -f $Purpose, $stamp
 $bundle = Join-Path $OutputPath $bundleName
 $artDir = Join-Path $bundle 'artifacts'
@@ -544,9 +553,16 @@ $notes = @($manual | Where-Object { $_ -and $_.Id -eq 'NOTE' } | ForEach-Object 
 #region --- Anonymizer -------------------------------------------------------------------------------
 $anon = New-SoaAnonymizer -KeepNames @($cfg.PsoGroupName, $cfg.ExcludeGroupName, $cfg.PilotGroupName, $cfg.HostGroupName, $cfg.PsoName, $cfg.GmsaName, $cfg.RollingTestPsoName, $cfg.EventLogName,
                                         $cfg.KirGpoNamePrefix, $cfg.DiagnosticsGpoName, $cfg.AuditGpoName, $cfg.BatchLogonGpoNameDc, $cfg.BatchLogonGpoNameAgent)
+$privDir = Join-Path $OutputPath 'private'
+$cumulativeMap = Join-Path $privDir 'pseudonyms.csv'
+$termsAuto = Join-Path (Split-Path $cfg.ConfigPath -Parent) 'SoaToolkit.terms.txt'
+$extra = @()
+$termSources = @()
 if (-not $NoAnonymize) {
+    if (-not $ResetPseudonyms -and (Test-Path -LiteralPath $cumulativeMap)) { Import-SoaAnonymizerMap -Anonymizer $anon -Entries @(Import-Csv -LiteralPath $cumulativeMap) }
     Add-SoaAnonymizerTerm -Anonymizer $anon -Kind DOMAIN -Value $ctx.DnsRoot
     if ($forest.RootDomain -ne $ctx.DnsRoot) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind DOMAIN -Value $forest.RootDomain }
+    foreach ($d in @($forest.Domains) + @($forest.UPNSuffixes)) { if ($d) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind DOMAIN -Value "$d" } }   # UPN suffixes = typically the public mail domain
     Add-SoaAnonymizerTerm -Anonymizer $anon -Kind NETBIOS -Value $ctx.NetBios
     foreach ($d in $allDcs) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind DC -Value $d.HostName; if ($d.Site) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind TERM -Value $d.Site } }
     foreach ($h in @($cfg.AgentHosts) + @($env:COMPUTERNAME)) { if (-not (@($allDcs | Where-Object { $_.HostName -ieq $h -or $_.Name -ieq $h }).Count)) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind HOST -Value $h } }
@@ -556,8 +572,12 @@ if (-not $NoAnonymize) {
     $userObjs = @($provisioned | Where-Object { $userNames -contains $_.SamAccountName })
     foreach ($u in ($userNames | Where-Object { $_ } | Select-Object -Unique)) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind USER -Value $u }
     foreach ($u in $userObjs) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind USER -Value $u.Name; if ($u.UserPrincipalName) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind USER -Value $u.UserPrincipalName } }
-    $extra = @($AdditionalTerms) + @(if ($TermsFile) { Get-Content -LiteralPath $TermsFile | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') } })
+    foreach ($tf in @($termsAuto, $TermsFile) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique) {
+        $t = @(Read-SoaTermsFile -Path $tf); $extra += $t; $termSources += ("{0} ({1} term(s))" -f (Split-Path $tf -Leaf), $t.Count)
+    }
+    if ($AdditionalTerms.Count) { $extra += $AdditionalTerms; $termSources += ("-AdditionalTerms ({0})" -f $AdditionalTerms.Count) }
     foreach ($t in $extra) { Add-SoaAnonymizerTerm -Anonymizer $anon -Kind TERM -Value $t }
+    if (-not $termSources.Count) { Add-CollectWarning "no terms file ($termsAuto) - company, site and project names are not replaced unless they appear in AD data. Template: SoaToolkit.terms.example.txt" }
 }
 function Protect([string]$Text) { if ($NoAnonymize) { $Text } else { ConvertTo-SoaAnonymizedText -Anonymizer $anon -Text $Text } }
 function Write-BundleFile([string]$RelPath, [string]$Content) {
@@ -586,7 +606,7 @@ if ($impactFile) { Add-Artifact 'artifacts\impact-writer-summary.csv' (Get-Conte
 foreach ($f in $runLogs) { Add-Artifact "artifacts\logs\$($f.Name)" (Get-Content -LiteralPath $f.FullName -Raw) 'install / uninstall run log' 'ReportPath\State' }
 if ($manifest) { Add-Artifact 'artifacts\manifest.json' ($manifest | ConvertTo-Json -Depth 8) 'install manifest (what the toolkit created / changed, previous values)' 'ReportPath\State' }
 if ($manual.Count) { Add-Artifact 'artifacts\manual-results.json' (ConvertTo-Json -InputObject $manual -Depth 3) 'results recorded with -Record' 'ReportPath\Validation' }
-if (Test-Path -LiteralPath $ConfigPath) { Add-Artifact 'artifacts\SoaToolkit.config.psd1' (Get-Content -LiteralPath $ConfigPath -Raw) 'configuration used' 'scripts folder' }
+if (Test-Path -LiteralPath $ConfigPath) { Add-Artifact 'artifacts\SoaToolkit.config.psd1' (Get-Content -LiteralPath $ConfigPath -Raw) 'configuration used' 'SoaToolkit.config.psd1' }
 foreach ($h in $hosts) {
     if (-not $h.Ok) { continue }
     $short = Get-SoaShortName $h.Host
@@ -693,13 +713,13 @@ $inventory.Insert(0, [pscustomobject]@{ File = 'report.json'; Content = 'everyth
 $inventory.Insert(0, [pscustomobject]@{ File = 'report.md'; Content = 'summary: environment, hosts, L1-L20 with evidence, problems'; Source = 'this script' })
 
 # Pseudonym map (outside the folder) and leak check
-$privDir = Join-Path $OutputPath 'private'
 $mapFile = Join-Path $privDir "$bundleName.map.csv"
 $hits = @()
 if (-not $NoAnonymize) {
     New-Item -Path $privDir -ItemType Directory -Force | Out-Null
     $mapRows = @(Get-SoaAnonymizerMap -Anonymizer $anon)
     $mapRows | Export-Csv -LiteralPath $mapFile -NoTypeInformation -Encoding UTF8
+    $mapRows | Export-Csv -LiteralPath $cumulativeMap -NoTypeInformation -Encoding UTF8      # cumulative: earlier pseudonyms + new ones
     foreach ($f in (Get-ChildItem -LiteralPath $bundle -Recurse -File)) {
         foreach ($h in (Find-SoaResidualIdentifier -Anonymizer $anon -Text (Get-Content -LiteralPath $f.FullName -Raw) -MapEntries $mapRows)) { $hits += [pscustomobject]@{ File = $f.FullName.Substring($bundle.Length + 1); Type = $h.Type; Value = $h.Value } }
     }
@@ -720,9 +740,10 @@ else {
     [void]$rf.AppendLine('- users that appear in the toolkit data (sAMAccountName, name, UPN) -> `user001`...; the account that ran this script and other `DOMAIN\account` -> `account001`...; gMSAs -> `gmsa01$`...')
     [void]$rf.AppendLine('- `CN=` / `OU=` values of distinguished names -> `object001` / `OU-001` (well-known names such as `CN=Users` and the toolkit''s own default names stay)')
     [void]$rf.AppendLine('- domain SIDs -> `S-1-5-21-1000000000-0-0-<RID>`, GUIDs -> `00000000-0000-4000-8000-...` (schema GUIDs of the toolkit stay), e-mail addresses, IPv4 addresses, user profile paths')
-    [void]$rf.AppendLine("- your additional terms (-AdditionalTerms / -TermsFile): $(@($extra).Count)")
+    [void]$rf.AppendLine("- UPN suffixes and further domains of the forest -> ``domain2.example``...")
+    [void]$rf.AppendLine("- your terms -> ``term001``...: $(if ($termSources.Count) { $termSources -join ', ' } else { '**none** - create SoaToolkit.terms.txt from SoaToolkit.terms.example.txt' })")
     [void]$rf.AppendLine(''); [void]$rf.AppendLine("Replacements by kind: $($kinds -join ', ')"); [void]$rf.AppendLine('')
-    [void]$rf.AppendLine("The map original -> pseudonym is stored **outside** this folder: ``$(Protect $mapFile)`` (on this workstation). Keep it to answer questions about the report; never attach it.")
+    [void]$rf.AppendLine("The map original -> pseudonym is stored **outside** this folder: ``$(Protect $mapFile)``, and cumulatively in ``private\pseudonyms.csv`` (on this workstation). The same original gets the same pseudonym in every report from this workstation, unless -ResetPseudonyms is used. Keep the map to answer questions about the report; never attach it.")
 }
 [void]$rf.AppendLine(''); [void]$rf.AppendLine('## Leak check'); [void]$rf.AppendLine('')
 if ($NoAnonymize) { [void]$rf.AppendLine('not performed (-NoAnonymize)') }

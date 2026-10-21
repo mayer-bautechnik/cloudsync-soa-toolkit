@@ -9,7 +9,7 @@
     domain fabrikam.local). Called by Invoke-SoaUnitTests.ps1; exit code = number of failed assertions.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string] $WorkPath)
@@ -83,9 +83,11 @@ $cfgPath = Join-Path $WorkPath 'cfg.psd1'
 }
 "@ | Set-Content -LiteralPath $cfgPath
 
+Set-Content -LiteralPath (Join-Path $WorkPath 'SoaToolkit.terms.txt') -Value @('# test terms', 'Fuerth', 'Max Muster')
+Add-Content -LiteralPath (Join-Path $rp 'Prerequisites\20261101_1000\checks.csv') -Value '"srv-dc1.fabrikam.local","note","INFO","mail relay fabrikam-group.com"'
 $export = Join-Path (Join-Path $repo 'scripts') 'Export-SoaReport.ps1'
 & $export -Record L16 -Result PASS -Note 'department change for jdoe arrived on SRV-DC1' -ConfigPath $cfgPath 6>$null | Out-Null
-& $export -NoRemote -Days 400 -AdditionalTerms 'Fuerth' -ConfigPath $cfgPath 6>$null | Out-Null
+& $export -NoRemote -Days 400 -ConfigPath $cfgPath 6>$null | Out-Null
 $bundle = @(Get-ChildItem -LiteralPath (Join-Path $rp 'Export') -Directory | Where-Object { $_.Name -like 'SoaReport_*' })[0].FullName
 $report = Get-Content -LiteralPath (Join-Path $bundle 'report.json') -Raw | ConvertFrom-Json
 $st = @{}; foreach ($i in $report.Validation) { $st[$i.Id] = $i.Status }
@@ -97,9 +99,19 @@ Assert-Test ($st.L8 -eq 'PASS' -and $st.L9 -eq 'PASS' -and $st.L11 -eq 'PASS') '
 Assert-Test ($st.L14 -eq 'WARN' -and $st.L15 -eq 'OPEN' -and $st.L16 -eq 'PASS') 'L14 WARN (writer would be blocked), L15 OPEN (tests in Audit), L16 manual PASS'
 Assert-Test ($report.Anonymized -and $report.Environment.Domain -eq 'corp.example') 'environment anonymized'
 $all = (Get-ChildItem -LiteralPath $bundle -Recurse -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
-Assert-Test ($all -notmatch '(?i)fabrikam|srv-dc|jdoe|mmuster|John Doe|Max Muster|Fuerth|helpdesk-anna|provAgentgMSA|S-1-5-21-111-|3f2504e0') 'no original identifier in any file of the folder'
+Assert-Test ($all -notmatch '(?i)fabrikam|srv-dc|jdoe|mmuster|John Doe|Max Muster|Fuerth|helpdesk-anna|provAgentgMSA|S-1-5-21-111-|3f2504e0') 'no original identifier in any file of the folder (incl. UPN suffix and terms file)'
+Assert-Test ((Get-Content -LiteralPath (Join-Path $bundle 'README-FIRST.md') -Raw) -match 'SoaToolkit\.terms\.txt \(2 term') 'terms file next to the configuration loaded automatically'
 $map = Get-ChildItem -LiteralPath (Join-Path (Join-Path $rp 'Export') 'private') -Filter '*.map.csv'
 Assert-Test (@($map).Count -eq 1 -and -not (Get-ChildItem -LiteralPath $bundle -Recurse -Filter '*.map.csv')) 'pseudonym map written outside the folder only'
+
+# Second report: pseudonyms stay the same (cumulative map)
+Start-Sleep -Seconds 1
+& $export -NoRemote -Days 400 -ConfigPath $cfgPath 6>$null | Out-Null
+$bundles = @(Get-ChildItem -LiteralPath (Join-Path $rp 'Export') -Directory | Where-Object { $_.Name -like 'SoaReport_*' } | Sort-Object Name)
+$m1 = @(Import-Csv -LiteralPath (Join-Path (Join-Path (Join-Path $rp 'Export') 'private') "$($bundles[0].Name).map.csv"))
+$m2 = @(Import-Csv -LiteralPath (Join-Path (Join-Path (Join-Path $rp 'Export') 'private') "$($bundles[-1].Name).map.csv"))
+$p1 = ($m1 | Where-Object { $_.Kind -eq 'DC' -and $_.Original -eq 'srv-dc2' }).Pseudonym; $p2 = ($m2 | Where-Object { $_.Kind -eq 'DC' -and $_.Original -eq 'srv-dc2' }).Pseudonym
+Assert-Test ($bundles.Count -eq 2 -and $p1 -and $p1 -eq $p2 -and $m2.Count -ge $m1.Count) 'pseudonyms are stable across reports (private\pseudonyms.csv)'
 
 Add-Content -LiteralPath (Join-Path $bundle 'report.md') -Value 'leak: srv-dc1'
 $refused = $false

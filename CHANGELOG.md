@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.0.4 – 2026-10-21
+
+Configuration and terms as top-level templates, safe operation without a separate admin workstation, a properly sized event log and central collection, stable pseudonyms in reports.
+
+### Changed
+
+- **Configuration and terms are templates at the top level:**
+  - `SoaToolkit.config.example.psd1` (was `scripts\SoaToolkit.config.psd1`) and the new `SoaToolkit.terms.example.txt`.
+  - Your copies `SoaToolkit.config.psd1` / `SoaToolkit.terms.txt` live next to them. They are git-ignored and not part of the release zip, so extracting a new release never overwrites them.
+  - The scripts look for the configuration at `-ConfigPath`, then next to the script (deployed hosts, old layout, with a hint to move it), then at the top level. Two configurations at once are refused, and a missing one names the template to copy.
+- **Default `ReportPath` is now `C:\SoaToolkitAdmin\Reports`** (was `C:\ProgramData\SoaToolkit\Reports`, inside `DataPath`). It is created on first use with access for Administrators and SYSTEM only.
+- **Report names contain seconds** (`SoaReport_<purpose>_yyyyMMdd_HHmmss`), so two runs within one minute no longer overwrite each other.
+
+### Fixed
+
+- **Admin scripts on a DC or agent host** (no separate admin workstation):
+  - with `ReportPath` inside `DataPath`, `DeployTasks` gave the toolkit gMSA modify rights on the install manifest, and `Uninstall -Step RemoveTasks` deleted manifest and reports in the middle of the rollback;
+  - running the admin scripts from the deployed copy (`ScriptInstallPath`) let `RemoveTasks` delete them.
+  - Install, Uninstall, Export, Test-SoaBehavior, Get-SoaEnforcementImpact, Test-SoaPrerequisites and `Watch -Scope All` now stop on a toolkit host in both cases, and warn elsewhere (`Assert-SoaAdminPaths`).
+- **Event log `SoaToolkit`:** a classic log is created with 512 KB and "overwrite older", so new events (heartbeats, failures) could be dropped when it was full. `DeployTasks` now sets `EventLogMaxSizeMB` (default 64) with "overwrite as needed"; new monitor check `EVENTLOG-SIZE`.
+
+### New
+
+- `EventLogAllowWef`: read access for NETWORK SERVICE on the `SoaToolkit` log only, for Windows Event Forwarding.
+- **Central collection** in [docs/OPERATIONS.md](docs/OPERATIONS.md#central-collection):
+  - event table with alert recommendations;
+  - WEF / WEC (GPO, subscription query, `SOA-Toolkit-Hosts` as subscription ACL);
+  - Azure Monitor Agent / DCR (XPath), WEF + AMA on the collector, SCOM;
+  - KQL for missing heartbeats and failures, Tier-0 notes on WEC and Azure Arc.
+- **Reports:**
+  - `SoaToolkit.terms.txt` is loaded automatically;
+  - UPN suffixes and further forest domains are pseudonymized automatically;
+  - pseudonyms are stable across reports (`private\pseudonyms.csv`, `-ResetPseudonyms` to start anew).
+- Repository hygiene (H5) reads the same `SoaToolkit.terms.txt` (the former `tools\forbidden-terms.local.txt` is still read) and scans only the files git would publish.
+- [docs/SETUP.md](docs/SETUP.md#21-without-a-separate-admin-workstation): section *Without a separate admin workstation*. [docs/DECISIONS.md](docs/DECISIONS.md): D-21 to D-23.
+
+### Upgrade from 2.0.3
+
+1. Extract the release. Copy your configuration from `scripts\SoaToolkit.config.psd1` to the top level as `SoaToolkit.config.psd1`, and delete the old one. Two configurations are refused.
+2. Add the new keys if you want other values than the defaults: `EventLogMaxSizeMB = 64`, `EventLogAllowWef = $false`.
+3. If `ReportPath` is inside `DataPath` (the old default), move the folder - it contains `State\manifest.json` - and set `ReportPath`, for example:
+   ```powershell
+   Move-Item C:\ProgramData\SoaToolkit\Reports C:\SoaToolkitAdmin\Reports
+   ```
+4. Optional: create `SoaToolkit.terms.txt` from `SoaToolkit.terms.example.txt`.
+5. `.\Install-SoaToolkit.ps1 -Step DeployTasks`, which updates the scripts and the event log size on every host.
+
 ## 2.0.3 – 2026-10-21
 
 Fix for Windows PowerShell 5.1, a CI gate in the release process, and consistent reporting instructions.

@@ -72,17 +72,30 @@ Reference: Microsoft's [Configure AD user and group enforcement in Microsoft Ent
 6. **Test user.** Create a user **in Entra ID**, put it in the Cloud Sync scope, and let it be provisioned. Enter it as `TestUser`.
 7. **Communication.** Plan this for SOA-converted users: when SCRIL is set, their known password is replaced, and password-based sign-ins stop working. This affects VPN/RADIUS, Wi-Fi PEAP-MSCHAPv2, LDAP binds by applications, and RDP or `runas` with a password.
 
+### 2.1 Without a separate admin workstation
+
+In a small domain the admin scripts can run directly on a domain controller or an agent host. Remote calls to the local host run locally. A DC is Tier 0, so this stays within the tier model; use the session only for administration (no browsing, no mail).
+
+| Point | What to do |
+|---|---|
+| Elevation | Start PowerShell with "Run as administrator" (the scripts register tasks, set ACLs and the event log locally) |
+| Modules | AD PowerShell and Group Policy Management (DCs normally have both; a member-server agent host needs `Install-WindowsFeature RSAT-AD-PowerShell, GPMC`) |
+| WinRM | `Test-SoaPrerequisites.ps1` and `Get-SoaEnforcementImpact.ps1` connect to every DC with WinRM, including the local one (enabled on Windows Server by default) |
+| Your copy of the toolkit | Keep it in its own folder, e.g. `C:\SoaToolkitAdmin\cloudsync-soa-toolkit`, **not** in `ScriptInstallPath` (`C:\Program Files\SoaToolkit`): `Uninstall -Step RemoveTasks` deletes the deployed folder |
+| `ReportPath` | **Outside** `DataPath` and `ScriptInstallPath` (default `C:\SoaToolkitAdmin\Reports`). Inside `DataPath` the toolkit gMSA would get modify rights on the manifest and the reports, and the rollback would delete them in the middle of the run. The scripts refuse that layout on a toolkit host and create `ReportPath` with access for Administrators and SYSTEM only |
+
 ## 3. Manual steps after the download
 
 | # | Step | Details |
 |---|---|---|
 | 1 | Verify the download | Compare the SHA-256 of the release ZIP with the value on the release page, then `Get-ChildItem -Recurse \| Unblock-File` |
-| 2 | Prepare the admin workstation | Windows PowerShell 5.1 (7.x works as well), RSAT AD DS + GPMC, Domain Admin (for the setup only), WinRM to all DCs / agent hosts |
+| 2 | Prepare the admin workstation | Windows PowerShell 5.1 (7.x works as well), RSAT AD DS + GPMC, Domain Admin (for the setup only), WinRM to all DCs / agent hosts. No separate admin workstation? See [section 2.1](#21-without-a-separate-admin-workstation) |
 | 3 | Microsoft prerequisites | Cloud Sync Entra ID → AD provisioning configured (agents, scope, target container, default user mapping with `msDS-ObjectSoa`); group marking if groups are provisioned; cumulative update on every writable DC; Cloud Kerberos Trust (AzureADKerberos object) |
 | 4 | **Download the KIR package(s)** | WS2022: `aka.ms/ADEnforcementGPMSI2022`, WS2025: `aka.ms/ADEnforcementGPMSI2025` - only for OS versions that run as writable DCs. **Do not** copy the ADMX by hand; the toolkit does it (central store if it exists, otherwise the local store of the workstation; it never creates a central store) |
 | 5 | KDS root key | `Get-KdsRootKey`; if none: `Add-KdsRootKey` and wait for replication (up to 10 h). Never delete it later. |
 | 6 | Member-server agent hosts | `Install-WindowsFeature RSAT-AD-PowerShell` (the tasks need the module; DCs have it) |
-| 7 | Configuration | Edit `scripts\SoaToolkit.config.psd1`: `AgentHosts`, `ToolkitGroupOU`, `TestUser`, `ReportPath`, optional names, PSO values, `PilotMode`, `ReconcileMinutes`, `ProjectUrl` |
+| 7 | Configuration | Copy `SoaToolkit.config.example.psd1` to `SoaToolkit.config.psd1` (both at the top level of the toolkit folder) and edit the copy: `AgentHosts`, `ToolkitGroupOU`, `TestUser`, `ReportPath` (outside `DataPath`), optional names, PSO values, `PilotMode`, `ReconcileMinutes`, `EventLogMaxSizeMB`, `EventLogAllowWef`, `ProjectUrl`. The scripts find it automatically; `-ConfigPath` overrides. |
+| 7a | Terms for reports | Copy `SoaToolkit.terms.example.txt` to `SoaToolkit.terms.txt` and list company, site, project and other names that the toolkit cannot find in AD ([REPORTING.md](REPORTING.md#anonymization)) |
 | 8 | Optional: code-signing certificate | see [section 7](#7-optional-code-signing) |
 
 ## 4. Installation
@@ -114,7 +127,7 @@ cd .\scripts
 | `Pso` | `PSO-SOA-CloudUsers` → `SOA-CloudUsers-PSO` | warns about PSOs with the same or a lower precedence |
 | `Delegate` | ACEs for the gMSA, Event Log Readers membership | |
 | `AllowList` | agent gMSAs + toolkit gMSA in `msDS-Settings` | skipped until `CN=Cloud` exists |
-| `DeployTasks` | scripts, folders, event log, tasks on every toolkit host | |
+| `DeployTasks` | scripts, folders, event log, tasks on every toolkit host | event log `SoaToolkit`: `EventLogMaxSizeMB` (default 64), overwrite as needed; with `EventLogAllowWef` also readable by NETWORK SERVICE for Windows Event Forwarding |
 | `Verify` | – | policy replication / load per DC + full monitoring run |
 
 After restarting the DCs, finish the policy-related steps:

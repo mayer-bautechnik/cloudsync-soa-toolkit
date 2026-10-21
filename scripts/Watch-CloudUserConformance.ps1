@@ -15,7 +15,8 @@
           writable DC : enforcement engine (ntdsai.dll, KIR feature overrides, '2 Security Events', policy load 3095,
                         audit / blocked events 3097 / 3098), onboarding task, Kerberos failures of cloud users on this DC
           agent host  : provisioning agent service, reconcile task + last run, and the domain-wide checks below
-          every host  : monitor task, script integrity (hash / signature), conformance errors in the event log
+          every host  : monitor task, script integrity (hash / signature), conformance errors in the event log,
+                        size / retention of the event log
         Writes the result to the event log 'SoaToolkit' (2000 heartbeat with summary, 2001 warning, 2002 failure -
         one event per check, affected objects listed) and to DataPath\Status\monitor.json.
 
@@ -34,7 +35,7 @@
     Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -55,11 +56,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
-if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
 Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg      = Import-SoaConfig -Path $ConfigPath
+if ($Scope -eq 'All') { Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot; Initialize-SoaReportPath -Config $cfg }
 $server   = Select-SoaTargetDc
 $ctx      = Get-SoaContext -Server $server
 $Ucc      = Get-SoaConstant 'Ucc'
@@ -124,6 +126,7 @@ $hostBlock = {
     $o.Conformance = Get-SafeValue { $f = Join-Path $P.DataPath 'Status\conformance.json'; if (Test-Path $f) { Get-Content -Path $f -Raw } else { $null } } 'conformance status'
     # Event log + recent conformance errors
     $o.EventLog = [Diagnostics.EventLog]::SourceExists($P.EventLog)
+    $o.EventLogConfig = Get-SafeValue { $l = Get-WinEvent -ListLog $P.EventLog -ErrorAction Stop; [pscustomobject]@{ MaxBytes = [int64]$l.MaximumSizeInBytes; Mode = "$($l.LogMode)" } } 'event log size'
     $o.ConformanceErrors = @(Get-SafeValue { Get-WinEvent -FilterHashtable @{ LogName = $P.EventLog; Id = 1002; StartTime = (Get-Date).AddMilliseconds(-$P.SinceMs) } -ErrorAction Stop |
         Select-Object -First 5 | ForEach-Object { ($_.Message -split "`r?`n")[0] } } 'event log')
     # Script integrity
@@ -247,6 +250,11 @@ foreach ($h in $hostsToCheck) {
     }
     if (@($d.ConformanceErrors).Count) { Add-Result 'CONF-ERRORS' $area "Conformance errors (${EventHours}h)" 'WARN' (@($d.ConformanceErrors) -join ' | ') }
     Add-Result 'EVENTLOG' $area "Event log '$($cfg.EventLogName)'" $(if ($d.EventLog) { 'PASS' } else { 'FAIL' }) $(if ($d.EventLog) { 'present' } else { 'missing (DeployTasks)' })
+    if ($d.EventLog -and $d.EventLogConfig) {
+        $wantBytes = [int64]$cfg.EventLogMaxSizeMB * 1MB
+        $okSize = ([int64]$d.EventLogConfig.MaxBytes -ge [int64]($wantBytes * 0.99)) -and ("$($d.EventLogConfig.Mode)" -eq 'Circular')
+        Add-Result 'EVENTLOG-SIZE' $area "Event log '$($cfg.EventLogName)' size / retention" $(if ($okSize) { 'PASS' } else { 'WARN' }) ("{0:N0} MB, mode {1} (expected >= {2} MB, Circular = overwrite as needed; set by DeployTasks - a full log with retention drops new events)" -f ([int64]$d.EventLogConfig.MaxBytes / 1MB), $d.EventLogConfig.Mode, $cfg.EventLogMaxSizeMB)
+    }
 
     # Integrity
     $expectedHashes = if ($deployment -and $deployment.Files) { $deployment.Files } elseif ($manifest) { (Get-SoaManifestEntry -Manifest $manifest -Kind 'HostDeployment' -Key $h.Host | Select-Object -First 1).Data.Files } else { $null }

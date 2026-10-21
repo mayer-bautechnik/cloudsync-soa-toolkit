@@ -4,9 +4,11 @@
 # Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 @{
     # =====================================================================================================
-    # SOA Toolkit configuration (cloudsync-soa-toolkit 2.0.3)
-    # Used by every script of the toolkit. All values below are PLACEHOLDERS (contoso.com) - adjust them.
-    # Keys that are omitted fall back to the defaults documented in SoaToolkit.psm1 ($script:SoaConfigDefaults).
+    # SOA Toolkit configuration TEMPLATE (cloudsync-soa-toolkit 2.0.4)
+    # Copy this file to 'SoaToolkit.config.psd1' in the same folder (top level of the toolkit folder) and adjust
+    # the copy. The copy is git-ignored and not part of the release zip, so updates never overwrite it.
+    # All values below are PLACEHOLDERS (contoso.com). Keys that are omitted fall back to the defaults in
+    # scripts\SoaToolkit.psm1 ($script:SoaConfigDefaults). DeployTasks copies your configuration to every host.
     # =====================================================================================================
 
     # Link written into the marker of every object the toolkit creates ("managed by SOA Toolkit ...")
@@ -64,6 +66,8 @@
     # --- Runtime on the toolkit hosts ---------------------------------------------------------------------
     TaskFolder              = '\SoaToolkit\'
     EventLogName            = 'SoaToolkit'
+    EventLogMaxSizeMB       = 64                      # size of the 'SoaToolkit' log on every host; overwrite as needed (also the WEF buffer)
+    EventLogAllowWef        = $false                  # $true = NETWORK SERVICE may read the log (Windows Event Forwarding, docs/OPERATIONS.md)
     ScriptInstallPath       = 'C:\Program Files\SoaToolkit'
     DataPath                = 'C:\ProgramData\SoaToolkit'
     ReconcileMinutes        = 60                      # 0 = reconcile task registered but disabled
@@ -81,7 +85,9 @@
 
     # --- Validation / reporting (admin workstation) -------------------------------------------------------
     TestUser                = 'soa-test01'            # dedicated test user CREATED IN ENTRA ID and provisioned by Cloud Sync
-    ReportPath              = 'C:\ProgramData\SoaToolkit\Reports'   # reports, test results and the install manifest
+    # Reports, test results and the install manifest. Must NOT be inside DataPath or ScriptInstallPath (the scripts
+    # refuse that on a DC / agent host). Created on first use with access for Administrators and SYSTEM only.
+    ReportPath              = 'C:\SoaToolkitAdmin\Reports'
     KrbtgtAzureAdWarnDays   = 180
     NewUserGraceMinutes     = 120                     # monitoring tolerance for users that were just created
     RollingTestMinutes      = 15

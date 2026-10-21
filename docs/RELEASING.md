@@ -105,4 +105,4 @@ The release cannot be replaced, and that is intended: users and reviewers rely o
   - Dependabot for GitHub Actions.
 - **CI hardening:** pin `actions/checkout` in `.github/workflows/ci.yml` to the full commit SHA of the release in use, with the version as a comment.
 - **GitHub CLI** (`gh auth login`) on the release workstation, for the CI gate in step 6.
-- **Local forbidden terms:** create `tools/forbidden-terms.local.txt` (git-ignored) with company domains, internal host names and other identifiers. `Test-SoaRepoHygiene.ps1` (H5) then blocks them.
+- **Terms file:** create `SoaToolkit.terms.txt` at the top level from `SoaToolkit.terms.example.txt`. It is git-ignored. List company domains, internal host names and other identifiers; `Test-SoaRepoHygiene.ps1` (H5) then blocks them, and `Export-SoaReport.ps1` uses the same file for pseudonyms.

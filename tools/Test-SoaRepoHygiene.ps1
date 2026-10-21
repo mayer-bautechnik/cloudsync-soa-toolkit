@@ -13,15 +13,18 @@
     H2  PowerShell files: UTF-8 with BOM and CRLF; Markdown / HTML / YAML / Python: LF
     H3  MPL-2.0 header with copyright line and repository link in every source file (ps1, psm1, psd1, py, html, yml)
     H4  no e-mail addresses (except placeholders such as *@example.* / *.invalid / users.noreply.github.com)
-    H5  no term of tools\forbidden-terms.local.txt (one term per line; the file is git-ignored and never published -
-        put company domains, internal host names etc. there)
+    H5  no term of SoaToolkit.terms.txt (top level of the repository; git-ignored, never published - the same file
+        that Export-SoaReport.ps1 uses for pseudonyms: company names, mail / UPN domains, host names, sites ...).
+        The former tools\forbidden-terms.local.txt is still read.
+    Scanned are the files git would publish (git ls-files: tracked + new, not ignored); without git all files except
+    the local ones (configuration, terms, maps, reports).
     H6  one version everywhere: SoaToolkit.psm1, script .NOTES, configuration header, README status, CHANGELOG
 
 .PARAMETER Root
     Repository root (default: parent of tools\).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
     Exit code 0 = clean, 1 = findings.
 #>
 [CmdletBinding()]
@@ -34,10 +37,20 @@ function Add-Finding([string]$Id, [string]$File, [string]$Text) { $findings.Add(
 
 $textExt = '.ps1', '.psm1', '.psd1', '.md', '.html', '.yml', '.yaml', '.py', '.json', '.txt', '.csv', '.admx', '.adml', '.gitignore', '.gitattributes', '.svg'
 $skipDirs = '\\.git\\|/\.git/|\\reports\\|/reports/|node_modules'
-$files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Where-Object {
-    $_.FullName -notmatch $skipDirs -and ($textExt -contains $_.Extension.ToLower() -or $_.Name -in '.gitignore', '.gitattributes', 'LICENSE', 'CODEOWNERS', 'allowed_signers') -and $_.Name -ne 'forbidden-terms.local.txt' })
-$forbiddenFile = Join-Path $ScriptRoot 'forbidden-terms.local.txt'
-$forbidden = @(if (Test-Path -LiteralPath $forbiddenFile) { Get-Content -LiteralPath $forbiddenFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') } })
+$localRx = '(^|[\\/])(SoaToolkit\.config\.psd1|SoaToolkit\.config\..+\.psd1|[^\\/]*\.terms\.txt|forbidden-terms[^\\/]*\.txt|[^\\/]*\.local\.[^\\/]+|[^\\/]*\.map\.csv|pseudonyms\.csv)$'
+$candidates = $null
+$git = Get-Command git -ErrorAction SilentlyContinue
+if ($git -and (Test-Path -LiteralPath (Join-Path $Root '.git'))) {
+    $list = @(& git -C $Root ls-files --cached --others --exclude-standard)
+    if ($LASTEXITCODE -eq 0) { $candidates = @($list | ForEach-Object { Get-Item -LiteralPath (Join-Path $Root $_) -Force -ErrorAction SilentlyContinue } | Where-Object { $_ }) }
+}
+if ($null -eq $candidates) { $candidates = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Where-Object { $_.FullName -notmatch $skipDirs }) }
+$files = @($candidates | Where-Object {
+    ($textExt -contains $_.Extension.ToLower() -or $_.Name -in '.gitignore', '.gitattributes', 'LICENSE', 'CODEOWNERS', 'allowed_signers') -and
+    ($_.Name -match '\.example\.' -or $_.FullName.Substring($Root.Length) -notmatch $localRx) })
+$termFiles = @((Join-Path $Root 'SoaToolkit.terms.txt'), (Join-Path $ScriptRoot 'forbidden-terms.local.txt')) | Where-Object { Test-Path -LiteralPath $_ }
+Import-Module (Join-Path (Join-Path $Root 'scripts') 'SoaToolkit.psm1') -Force -DisableNameChecking
+$forbidden = @(foreach ($tf in $termFiles) { Read-SoaTermsFile -Path $tf }) | Select-Object -Unique
 $hidden = '[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u00AD\uFEFF]'
 $mailRx = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 $mailOk = '@(example\.(com|org|net)|[a-z0-9.-]*\.example|example\.invalid|contoso\.com|fabrikam\.com|users\.noreply\.github\.com|anthropic\.com)$'
@@ -65,7 +78,7 @@ foreach ($f in $files) {
     # H4
     foreach ($x in [regex]::Matches($text, $mailRx)) { if ($x.Value -notmatch $mailOk) { Add-Finding 'H4' $rel "e-mail address '$($x.Value)'" } }
     # H5
-    foreach ($t in $forbidden) { if ($text.IndexOf($t, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Add-Finding 'H5' $rel "forbidden term (tools\forbidden-terms.local.txt line '$($t.Substring(0,1))...')" } }
+    foreach ($t in $forbidden) { if ($text.IndexOf($t, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Add-Finding 'H5' $rel "term from SoaToolkit.terms.txt ('$($t.Substring(0,1))...')" } }
 }
 
 # H6 - version consistency
@@ -78,14 +91,14 @@ if (Test-Path -LiteralPath $psm) {
         if ($t -match 'Toolkit: cloudsync-soa-toolkit (\S+) \((\d{4}-\d{2}-\d{2})\)') { if ($Matches[1] -ne $v -or $Matches[2] -ne $d) { Add-Finding 'H6' $s.Name "help says $($Matches[1]) ($($Matches[2])), module says $v ($d)" } }
         elseif ($s.DirectoryName -like '*scripts') { Add-Finding 'H6' $s.Name 'no "Toolkit: cloudsync-soa-toolkit <version> (<date>)" line in the help' }
     }
-    $cfgFile = Join-Path (Join-Path $Root 'scripts') 'SoaToolkit.config.psd1'
-    if ((Get-Content -LiteralPath $cfgFile -Raw) -notmatch "cloudsync-soa-toolkit $([regex]::Escape($v))\)") { Add-Finding 'H6' 'SoaToolkit.config.psd1' "header does not name version $v" }
+    $cfgFile = Join-Path $Root 'SoaToolkit.config.example.psd1'
+    if ((Get-Content -LiteralPath $cfgFile -Raw) -notmatch "cloudsync-soa-toolkit $([regex]::Escape($v))\)") { Add-Finding 'H6' 'SoaToolkit.config.example.psd1' "header does not name version $v" }
     if ((Get-Content -LiteralPath (Join-Path $Root 'README.md') -Raw) -notmatch "Status: $([regex]::Escape($v)) \($d\)") { Add-Finding 'H6' 'README.md' "status line does not say $v ($d)" }
     if ((Get-Content -LiteralPath (Join-Path $Root 'CHANGELOG.md') -Raw) -notmatch "(?m)^## $([regex]::Escape($v)) ") { Add-Finding 'H6' 'CHANGELOG.md' "no entry for $v" }
 }
 
-Write-Host ("Repository hygiene - {0} text file(s), {1} local forbidden term(s)" -f $files.Count, $forbidden.Count) -ForegroundColor Cyan
-if (-not $forbidden.Count) { Write-Host '  (no tools\forbidden-terms.local.txt - H5 checks nothing; create it locally, it is git-ignored)' -ForegroundColor DarkGray }
+Write-Host ("Repository hygiene - {0} text file(s), {1} term(s) from SoaToolkit.terms.txt" -f $files.Count, $forbidden.Count) -ForegroundColor Cyan
+if (-not $forbidden.Count) { Write-Host '  (no SoaToolkit.terms.txt at the top level - H5 checks nothing; create it from SoaToolkit.terms.example.txt, it is git-ignored)' -ForegroundColor DarkGray }
 foreach ($id in 'H1', 'H2', 'H3', 'H4', 'H5', 'H6') {
     $x = @($findings | Where-Object { $_.Id -eq $id })
     Write-Host ("  [{0}] {1}" -f $(if ($x.Count) { 'FAIL' } else { 'PASS' }), $id) -ForegroundColor $(if ($x.Count) { 'Red' } else { 'Green' })
