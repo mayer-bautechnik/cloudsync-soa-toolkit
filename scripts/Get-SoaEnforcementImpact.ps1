@@ -31,19 +31,21 @@
     Folder for CSV + HTML. Default: <ReportPath>\Impact\<timestamp> (or Desktop\SOA-Impact_<timestamp> without configuration)
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Read-only. Run as Domain Admin from the admin workstation with RSAT. Requires WinRM (5985) to every writable DC.
     Usable without the rest of the toolkit (without a configuration file the toolkit gMSA is simply not labelled).
 #>
 [CmdletBinding()]
 param(
     [int]    $Days = 14,
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1'),
+    [string] $ConfigPath,
     [string] $OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 $cfg = $null
 if (Test-Path -LiteralPath $ConfigPath) { try { $cfg = Import-SoaConfig -Path $ConfigPath } catch { Write-Warning $_.Exception.Message } }
 if (-not $OutputPath) {
@@ -308,4 +310,5 @@ $html = @(
 ConvertTo-Html -Head $css -Body ($html -join "`n") -Title 'SOA enforcement impact' | Set-Content (Join-Path $OutputPath 'impact.html') -Encoding UTF8
 Write-Host ''
 Write-Host "Reports: $OutputPath" -ForegroundColor Cyan
+Write-Host "         (contains names of your environment - share it only through Export-SoaReport.ps1)" -ForegroundColor DarkGray
 #endregion

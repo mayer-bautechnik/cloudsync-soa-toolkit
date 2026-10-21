@@ -76,7 +76,7 @@
     .\Export-SoaReport.ps1 -Package 'C:\ProgramData\SoaToolkit\Reports\Export\SoaReport_Validation_20261121_0930'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT, WinRM to the toolkit hosts). See docs/REPORTING.md.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Collect', SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -100,11 +100,13 @@ param(
     [Parameter(ParameterSetName = 'List', Mandatory = $true)][switch] $ListChecks,
 
     [string] $OutputPath,
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')
+    [string] $ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking -Verbose:$false
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking -Verbose:$false
 
 #region --- Validation catalogue (keep in sync with docs/VALIDATION.md) -------------------------------
 $Catalogue = @(
@@ -218,10 +220,10 @@ $adModule = Get-Module ActiveDirectory
 $gpModule = Get-Module -ListAvailable GroupPolicy | Select-Object -First 1
 
 # Integrity of the scripts used on this workstation (against SHA256SUMS.txt of the release, if present)
-$sumsFile = @((Join-Path $PSScriptRoot 'SHA256SUMS.txt'), (Join-Path (Split-Path $PSScriptRoot -Parent) 'SHA256SUMS.txt')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$sumsFile = @((Join-Path $ScriptRoot 'SHA256SUMS.txt'), (Join-Path (Split-Path $ScriptRoot -Parent) 'SHA256SUMS.txt')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 $sums = @{}
 if ($sumsFile) { foreach ($l in Get-Content -LiteralPath $sumsFile) { if ($l -match '^([0-9a-f]{64})\s+\*?(.+)$') { $sums[(Split-Path $Matches[2] -Leaf).ToLower()] = $Matches[1] } } }
-$localFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | ForEach-Object {
+$localFiles = @(Get-ChildItem -LiteralPath $ScriptRoot -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | ForEach-Object {
     $h = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()
     [pscustomobject]@{ File = $_.Name; Sha256 = $h; Release = $(if (-not $sums.Count) { 'no SHA256SUMS.txt' } elseif (-not $sums.ContainsKey($_.Name.ToLower())) { 'not in release' } elseif ($sums[$_.Name.ToLower()] -eq $h) { 'match' } else { 'MODIFIED' }) }
 })

@@ -37,7 +37,7 @@
             behavior-findings.json and behavior-report.html
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT). WinRM to the DCs and agent hosts.
 #>
 [CmdletBinding()]
@@ -55,13 +55,15 @@ param(
 
     [switch] $WaitForExpiry,
 
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1'),
+    [string] $ConfigPath,
 
     [string] $OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg = Import-SoaConfig -Path $ConfigPath
@@ -125,6 +127,7 @@ function Write-Report {
     }
     ConvertTo-Html -Head (Get-SoaHtmlStyle) -Body $sb.ToString() -Title 'SOA Toolkit behavior tests' | Set-Content -Path $reportPath -Encoding UTF8
     Write-Host "Report: $reportPath" -ForegroundColor Cyan
+    Write-Host "        (contains names of your environment - share it only through Export-SoaReport.ps1)" -ForegroundColor DarkGray
 }
 #endregion
 

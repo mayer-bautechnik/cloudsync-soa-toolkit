@@ -32,15 +32,17 @@
     .\tools\Test-SoaSecurityClaims.ps1 -Json .\claims.json
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Exit code 0 = all claims hold, 1 = at least one violation.
 #>
 [CmdletBinding()]
 param(
-    [string] $Path = (Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts'),
+    [string] $Path,
     [string] $Json
 )
 $ErrorActionPreference = 'Stop'
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $Path) { $Path = Join-Path (Split-Path $ScriptRoot -Parent) 'scripts' }
 
 $files = @(Get-ChildItem -LiteralPath $Path -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | Sort-Object Name)
 $violations = New-Object System.Collections.Generic.List[object]

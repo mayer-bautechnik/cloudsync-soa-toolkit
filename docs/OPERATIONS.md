@@ -251,6 +251,7 @@ The scheduled monitor runs as the gMSA, which is not a local administrator. Chec
 | Tasks fail with 0x8007052F / logon failure | gMSA batch logon right (`BATCH`), host in `SOA-Toolkit-Hosts`, `Test-ADServiceAccount` on the host |
 | `USR-WRITE` | user outside the write scope: extend `WriteScope` or move the user, then `-Step Delegate, DeployTasks` |
 | `USR-NOROLL` | the user signed in while expired but the secret was not rolled. Which sign-in path? Repeat `Test-SoaBehavior.ps1 -Suite RollingObserve` with that path |
-| `USR-ROLLPLS` | rolling does not update `pwdLastSet` in your build: every sign-in rolls again; functionally harmless, report it |
+| `USR-ROLLPLS` | rolling does not update `pwdLastSet` in your build: every sign-in rolls again; functionally harmless. Please report it (bug report with `Export-SoaReport.ps1`) |
 | `DC-LOAD` FAIL | stale SID in the allow-list (`POL-SIDS`), `-Step AllowList -RemoveStaleSids` |
 | No heartbeat 2000 | event log channel access (set by DeployTasks), task state, gMSA |
+| Still unclear | `.\Export-SoaReport.ps1 -Purpose BugReport -Description '...' -Days 7`, review, `-Package`, then the *Bug report* issue form ([REPORTING.md](REPORTING.md)). Do not attach raw reports or event logs |

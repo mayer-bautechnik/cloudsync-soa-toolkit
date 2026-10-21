@@ -2,7 +2,7 @@
 
 The findings K1-K21 describe Microsoft's features and were measured or researched before and during the development of 2.x. This checklist verifies **the toolkit itself** end to end in a lab domain. Until an item is verified, its status below is *open*. The README status section links here.
 
-**Status on 2026-10-21 (release 2.0.2): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
+**Status on 2026-10-21 (release 2.0.3): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
 
 ## How to run it
 

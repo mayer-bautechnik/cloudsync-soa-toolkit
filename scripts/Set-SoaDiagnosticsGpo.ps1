@@ -32,7 +32,7 @@
     .\Set-SoaDiagnosticsGpo.ps1 -Action Status
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run as Domain Admin with RSAT. All GPO operations target the PDC emulator. WinRM to the DCs for -Refresh / Status.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -49,13 +49,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 #region --- Context ---------------------------------------------------------------------------------
 $cfg = $null
 if ($ConfigPath) { $cfg = Import-SoaConfig -Path $ConfigPath }
-elseif (Test-Path (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')) {
-    try { $cfg = Import-SoaConfig -Path (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1') } catch { $cfg = $null }
+elseif (Test-Path (Join-Path $ScriptRoot 'SoaToolkit.config.psd1')) {
+    try { $cfg = Import-SoaConfig -Path (Join-Path $ScriptRoot 'SoaToolkit.config.psd1') } catch { $cfg = $null }
 }
 if (-not $GpoName) { $GpoName = if ($cfg) { $cfg.DiagnosticsGpoName } else { 'SOA Toolkit - DC - NTDS Security Diagnostics' } }
 $ctx     = Get-SoaContext

@@ -39,7 +39,7 @@
             (1000 change, 1001 warning, 1002 error, 1010 run summary). Exit code 0 = OK, 1 = errors.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Reads and writes go to one DC per run: the local DC on a writable DC, otherwise a discovered writable DC.
 #>
 [CmdletBinding()]
@@ -62,11 +62,13 @@ param(
 
     [switch] $IncludeAcl,
 
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')
+    [string] $ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 $cfg     = Import-SoaConfig -Path $ConfigPath
 $server  = Select-SoaTargetDc -Preferred $Server
@@ -80,7 +82,7 @@ $runAs   = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 # Deployment information written by Install-SoaToolkit.ps1 -Step DeployTasks (write scope, agent SIDs) - the gMSA
 # cannot query the agent hosts itself. Interactive runs compute the values live.
 $deployment = $null
-$depFile = Join-Path $PSScriptRoot 'deployment.json'
+$depFile = Join-Path $ScriptRoot 'deployment.json'
 if (Test-Path -LiteralPath $depFile) { try { $deployment = Get-Content -LiteralPath $depFile -Raw | ConvertFrom-Json } catch { } }
 
 function Write-RunLog([string]$Text, [string]$Level = 'INFO') {

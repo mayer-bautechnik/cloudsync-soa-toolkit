@@ -21,12 +21,14 @@
     Repository root (default: parent of tools\).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Exit code 0 = clean, 1 = findings.
 #>
 [CmdletBinding()]
-param([string] $Root = (Split-Path $PSScriptRoot -Parent))
+param([string] $Root)
 $ErrorActionPreference = 'Stop'
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $Root) { $Root = Split-Path $ScriptRoot -Parent }
 $findings = New-Object System.Collections.Generic.List[object]
 function Add-Finding([string]$Id, [string]$File, [string]$Text) { $findings.Add([pscustomobject]@{ Id = $Id; File = $File; Text = $Text }) }
 
@@ -34,7 +36,7 @@ $textExt = '.ps1', '.psm1', '.psd1', '.md', '.html', '.yml', '.yaml', '.py', '.j
 $skipDirs = '\\.git\\|/\.git/|\\reports\\|/reports/|node_modules'
 $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Where-Object {
     $_.FullName -notmatch $skipDirs -and ($textExt -contains $_.Extension.ToLower() -or $_.Name -in '.gitignore', '.gitattributes', 'LICENSE', 'CODEOWNERS', 'allowed_signers') -and $_.Name -ne 'forbidden-terms.local.txt' })
-$forbiddenFile = Join-Path $PSScriptRoot 'forbidden-terms.local.txt'
+$forbiddenFile = Join-Path $ScriptRoot 'forbidden-terms.local.txt'
 $forbidden = @(if (Test-Path -LiteralPath $forbiddenFile) { Get-Content -LiteralPath $forbiddenFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') } })
 $hidden = '[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u00AD\uFEFF]'
 $mailRx = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
@@ -67,7 +69,7 @@ foreach ($f in $files) {
 }
 
 # H6 - version consistency
-$psm = Join-Path $Root 'scripts\SoaToolkit.psm1'
+$psm = Join-Path (Join-Path $Root 'scripts') 'SoaToolkit.psm1'
 if (Test-Path -LiteralPath $psm) {
     $v = if ((Get-Content -LiteralPath $psm -Raw) -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { $null }
     $d = if ((Get-Content -LiteralPath $psm -Raw) -match "\`$script:SoaReleaseDate\s*=\s*'([^']+)'") { $Matches[1] } else { $null }
@@ -76,7 +78,7 @@ if (Test-Path -LiteralPath $psm) {
         if ($t -match 'Toolkit: cloudsync-soa-toolkit (\S+) \((\d{4}-\d{2}-\d{2})\)') { if ($Matches[1] -ne $v -or $Matches[2] -ne $d) { Add-Finding 'H6' $s.Name "help says $($Matches[1]) ($($Matches[2])), module says $v ($d)" } }
         elseif ($s.DirectoryName -like '*scripts') { Add-Finding 'H6' $s.Name 'no "Toolkit: cloudsync-soa-toolkit <version> (<date>)" line in the help' }
     }
-    $cfgFile = Join-Path $Root 'scripts\SoaToolkit.config.psd1'
+    $cfgFile = Join-Path (Join-Path $Root 'scripts') 'SoaToolkit.config.psd1'
     if ((Get-Content -LiteralPath $cfgFile -Raw) -notmatch "cloudsync-soa-toolkit $([regex]::Escape($v))\)") { Add-Finding 'H6' 'SoaToolkit.config.psd1' "header does not name version $v" }
     if ((Get-Content -LiteralPath (Join-Path $Root 'README.md') -Raw) -notmatch "Status: $([regex]::Escape($v)) \($d\)") { Add-Finding 'H6' 'README.md' "status line does not say $v ($d)" }
     if ((Get-Content -LiteralPath (Join-Path $Root 'CHANGELOG.md') -Raw) -notmatch "(?m)^## $([regex]::Escape($v)) ") { Add-Finding 'H6' 'CHANGELOG.md' "no entry for $v" }

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.0.3 – 2026-10-21
+
+Fix for Windows PowerShell 5.1, a CI gate in the release process, and consistent reporting instructions.
+
+### Fixed
+
+- **Scripts started with `powershell.exe -File` on Windows PowerShell 5.1** (as the scheduled tasks are) could fail before they started. `$PSScriptRoot` was empty in parameter default values, so the default `-ConfigPath` could not be built.
+  - All scripts, tools and tests now resolve their folder at the start of the script, with a fallback to `$MyInvocation.MyCommand.Definition`.
+  - `-ConfigPath`, `-Path` and `-Root` get their defaults after `param()`.
+  - Found by the CI job on Windows PowerShell 5.1 after the 2.0.2 release. The 2.x scripts have not run in a domain yet (lab validation pending), so no deployment was affected.
+- Tests and tools build child paths with nested `Join-Path` (no mixed `/` and `\`).
+
+### Changed
+
+- **Release process ([docs/RELEASING.md](docs/RELEASING.md)):**
+  - the commit is pushed and both CI jobs must be green **before** the tag is created and the release is published;
+  - `tools/Build-SoaRelease.ps1` refuses to build when the CI runs of the commit are not all successful (checked with the GitHub CLI; `-SkipCiCheck` only with a reason);
+  - a new section describes what to do when a published, immutable release turns out to be broken: fix forward, never move a published tag.
+- `tools/Invoke-SoaStaticChecks.ps1` also runs the tests and the claims check under **Windows PowerShell 5.1** when it is started from PowerShell 7 on Windows.
+- **Reporting consistency:**
+  - `Test-SoaPrerequisites.ps1`, `Watch-CloudUserConformance.ps1`, `Get-SoaEnforcementImpact.ps1` and `Test-SoaBehavior.ps1` point out that their reports contain identifiers and are shared through `Export-SoaReport.ps1`;
+  - CONTRIBUTING, README, OPERATIONS (troubleshooting), REPORTING, AGENTS and the issue forms describe the same process;
+  - new issue form *Question or idea*.
+
 ## 2.0.2 – 2026-10-21
 
 Maintainability, transparency and verifiability. No change to the target state, the delegated rights or the setup steps.

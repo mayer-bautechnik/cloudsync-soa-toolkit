@@ -17,16 +17,17 @@
     Child processes are used where mocks must not leak into the main test scope.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Exit code = number of failed assertions (0 = all passed).
 #>
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot -Parent
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+$repo = Split-Path $ScriptRoot -Parent
 $tmp  = Join-Path ([IO.Path]::GetTempPath()) ('soa-tests-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -Path $tmp -ItemType Directory -Force | Out-Null
-Import-Module (Join-Path $repo 'scripts/SoaToolkit.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path (Join-Path $repo 'scripts') 'SoaToolkit.psm1') -Force -DisableNameChecking
 $script:fail = 0
 function Assert-Test($Condition, [string]$Message) { if ($Condition) { Write-Host "PASS $Message" -ForegroundColor Green } else { Write-Host "FAIL $Message" -ForegroundColor Red; $script:fail++ } }
 $exe = (Get-Process -Id $PID).Path
@@ -34,7 +35,7 @@ $exe = (Get-Process -Id $PID).Path
 try {
 # Config
 $tmpCfg = Join-Path $tmp 'cfg.psd1'
-(Get-Content (Join-Path $repo 'scripts/SoaToolkit.config.psd1') -Raw) -replace 'C:\\ProgramData\\SoaToolkit\\Reports', ((Join-Path $tmp 'reports') -replace "'", "''") | Set-Content $tmpCfg
+(Get-Content (Join-Path (Join-Path $repo 'scripts') 'SoaToolkit.config.psd1') -Raw) -replace 'C:\\ProgramData\\SoaToolkit\\Reports', ((Join-Path $tmp 'reports') -replace "'", "''") | Set-Content $tmpCfg
 $cfg = Import-SoaConfig -Path $tmpCfg
 Assert-Test ($cfg.Pso.MinPasswordLength -eq 64) 'config PSO min length 64'
 Assert-Test ($cfg.Pso.MaxPasswordAgeDays -eq 30) 'config PSO max age 30'
@@ -58,7 +59,7 @@ Assert-Test (-not (Test-SoaDnInScope -Dn 'CN=u,OU=A,DC=c,DC=com' -ScopeDns @('OU
 Assert-Test (-not (Test-SoaDnInScope -Dn 'CN=u,OU=AB,DC=c,DC=com' -ScopeDns @('B,DC=c,DC=com'))) 'no partial RDN match'
 
 # KIR parsing
-$defs = @(Get-SoaKirDefinition -AdmxPath (Join-Path $PSScriptRoot 'fixtures/sample-kir.admx'))
+$defs = @(Get-SoaKirDefinition -AdmxPath (Join-Path (Join-Path $ScriptRoot 'fixtures') 'sample-kir.admx'))
 Assert-Test ($defs.Count -eq 1) 'one KIR policy found'
 Assert-Test ($defs[0].DisplayName -eq 'Feature Preview: AD object enforcement') 'display name from ADML'
 Assert-Test (@($defs[0].Items).Count -eq 2) 'two feature IDs'
@@ -107,7 +108,7 @@ $global:setCalls = @()
 function global:Get-ADObject { param($Identity, $Server, $Properties) [pscustomobject]@{ versionNumber = (3 -shl 16) + 7; gPCMachineExtensionNames = '[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]' } }
 function global:Set-ADObject { param($Identity, $Server, $Replace) $global:setCalls += $Replace }
 $ctxFake = [pscustomobject]@{ DomainDN = 'DC=x'; Pdc = 'pdc'; DnsRoot = 'x' }
-try { $nv = Update-SoaGpoMachineVersion -Id ([guid]::NewGuid()) -Context $ctxFake -AddCse @('[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]') } catch { "  (GPT.INI write expected to fail on Linux: $($_.Exception.Message.Substring(0,[Math]::Min(80,$_.Exception.Message.Length))))" }
+try { $nv = Update-SoaGpoMachineVersion -Id ([guid]::NewGuid()) -Context $ctxFake -AddCse @('[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]') } catch { "  (GPT.INI write expected to fail without a domain: $($_.Exception.Message.Substring(0,[Math]::Min(80,$_.Exception.Message.Length))))" }
 $r = $global:setCalls[0]
 Assert-Test ($r.versionNumber -eq ((3 -shl 16) + 8)) 'machine version incremented, user version kept'
 Assert-Test ($r.gPCMachineExtensionNames -eq '[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}][{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]') 'CSE list merged and sorted'
@@ -177,13 +178,13 @@ Set-Content -LiteralPath (Join-Path $bad 'Bad.ps1') -Value @(
     'Set-ADAccountPassword -Identity x -Reset -NewPassword $p'
     '[Convert]::FromBase64String("eA==")'
 )
-& $exe -NoProfile -File (Join-Path $repo 'tools/Test-SoaSecurityClaims.ps1') -Path $bad *> $null
+& $exe -NoProfile -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') -Path $bad *> $null
 Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaSecurityClaims.ps1 fails on a script with violations'
-& $exe -NoProfile -File (Join-Path $repo 'tools/Test-SoaSecurityClaims.ps1') *> $null
+& $exe -NoProfile -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaSecurityClaims.ps1 passes on the toolkit scripts'
 
 # Export-SoaReport.ps1 end to end (mocked ActiveDirectory module, child process)
-& $exe -NoProfile -File (Join-Path $PSScriptRoot 'Test-SoaExportReport.ps1') -WorkPath (Join-Path $tmp 'export')
+& $exe -NoProfile -File (Join-Path $ScriptRoot 'Test-SoaExportReport.ps1') -WorkPath (Join-Path $tmp 'export')
 Assert-Test ($LASTEXITCODE -eq 0) 'Export-SoaReport.ps1 end-to-end test (see output above)'
 } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

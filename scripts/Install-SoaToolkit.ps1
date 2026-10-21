@@ -60,7 +60,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -84,11 +84,13 @@ param(
 
     [datetime] $Since = (Get-Date).AddHours(-2),
 
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')
+    [string] $ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg      = Import-SoaConfig -Path $ConfigPath
@@ -552,7 +554,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                     $existed = $true
                 }
             }
-            $diagScript = Join-Path $PSScriptRoot 'Set-SoaDiagnosticsGpo.ps1'
+            $diagScript = Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1'
             if (-not $existed) {
                 & $diagScript -Action Install -ConfigPath $ConfigPath -WhatIf:$WhatIfPreference
                 $g3 = Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx
@@ -915,7 +917,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             $stage = Join-Path $env:TEMP ('soa_stage_{0}' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
             New-Item -Path $stage -ItemType Directory -Force | Out-Null
             foreach ($f in $files) {
-                $src = if ($f -eq 'SoaToolkit.config.psd1') { $cfg.ConfigPath } else { Join-Path $PSScriptRoot $f }
+                $src = if ($f -eq 'SoaToolkit.config.psd1') { $cfg.ConfigPath } else { Join-Path $ScriptRoot $f }
                 if (-not (Test-Path -LiteralPath $src)) { throw "File not found: $src" }
                 Copy-Item -LiteralPath $src -Destination (Join-Path $stage $f) -Force
             }
@@ -1014,7 +1016,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         #----------------------------------------------------------------------------------------------
         'Conform' {
             Write-SoaSection 'Conform: initial analysis and target state for all marked cloud users'
-            $runner = Join-Path $PSScriptRoot 'Invoke-CloudUserConformance.ps1'
+            $runner = Join-Path $ScriptRoot 'Invoke-CloudUserConformance.ps1'
             & $runner -Mode Analyze -ConfigPath $ConfigPath -OutputPath (Join-Path $cfg.ReportPath 'Conformance')
             if ($WhatIfPreference) { Write-Host 'WhatIf: analysis only - no changes.' -ForegroundColor Cyan; break }
             if (-not $Cmdlet.ShouldProcess('all in-scope cloud users', 'Apply the target state (one reconcile run as the toolkit gMSA)')) { break }
@@ -1175,7 +1177,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 if (@($state | Where-Object { $_.LoadStatus -eq 'ERROR' }).Count) { Write-SoaLine FAIL 'POLICY LOAD ERROR on at least one DC - do NOT switch to Enforced.' }
                 if (@($state | Where-Object { $_.LoadStatus -eq 'NONE' }).Count) { Write-SoaLine INFO 'No 3095 since -Since on some DCs (policy unchanged in that window or diagnostics level 0). Use an earlier -Since.' }
             } else { Write-SoaLine WARN 'CN=Cloud not present yet.' }
-            & (Join-Path $PSScriptRoot 'Watch-CloudUserConformance.ps1') -Scope All -ConfigPath $ConfigPath -Html
+            & (Join-Path $ScriptRoot 'Watch-CloudUserConformance.ps1') -Scope All -ConfigPath $ConfigPath -Html
         }
     }
     Write-InstallLog "Step $current finished"

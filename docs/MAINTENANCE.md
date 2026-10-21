@@ -23,7 +23,7 @@ How the toolkit stays correct over time, while Microsoft's preview features, Win
 | After changes to OUs, Cloud Sync scoping or audit settings | write scope, SACL, delegation still match | `.\Install-SoaToolkit.ps1 -Step AuditConfig, Delegate, Verify` |
 | Every PSO max age (default 30 days) | rolling works for active users | monitor report: secret changes, Kerberos 0x17 (L20) |
 | Quarterly | references older than 6 months re-read; signing key, maintainers, branch protection, CI action pins reviewed | README references (retrieval dates), repository settings |
-| On every report from users | reproduce with an anonymized report | [REPORTING.md](REPORTING.md) |
+| On every report from users | reproduce with the anonymized report; ask the reporter about pseudonyms (they hold the map) | [REPORTING.md](REPORTING.md) |
 
 ## Upstream watch list
 

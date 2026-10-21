@@ -1,0 +1,26 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+name: Question or idea
+description: A question about the toolkit, or a suggestion for an improvement.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a malfunction use the *Bug report* form; for security-relevant findings the private vulnerability report.
+  - type: textarea
+    id: text
+    attributes:
+      label: Question or idea
+      description: Use placeholders (contoso.com) instead of real names.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: The text contains no real domain, host, user or company names.
+          required: true

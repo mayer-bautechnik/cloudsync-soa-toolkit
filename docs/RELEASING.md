@@ -1,50 +1,96 @@
 # Releasing
 
-Checklist for the maintainer. Releases are immutable on GitHub: assets cannot be changed after publishing, so build, verify and upload in a **draft** first.
+Checklist for the maintainer. GitHub releases of this repository are **immutable**: after publishing, the tag and the assets can no longer be changed or replaced. Every gate below must therefore pass **before** the tag is created and the release is published. A mistake found later can only be fixed with a new version.
+
+```mermaid
+flowchart LR
+    A["1 Prepare<br/>version, docs, PDF,<br/>release notes"] --> B["2 Local checks<br/>pwsh 7 + Windows PowerShell 5.1"]
+    B --> C["3 Push the commit<br/>(no tag yet)"]
+    C --> D{"4 CI green?<br/>both jobs"}
+    D -- no --> A
+    D -- yes --> E["5 Signed tag<br/>on exactly this commit"]
+    E --> F["6 Build asset from the tag<br/>(refuses if CI not green)"]
+    F --> G["7 Draft release,<br/>verify, publish"]
+```
 
 ## 1. Prepare
 
-1. Version and date in `scripts/SoaToolkit.psm1` (`$script:SoaVersion`, `$script:SoaReleaseDate`).
-2. The same version and date in:
+1. Set the version and date in `scripts/SoaToolkit.psm1` (`$script:SoaVersion`, `$script:SoaReleaseDate`).
+2. Use the same version and date in:
    - the `.NOTES` line of every script in `scripts/`, `tools/` and `tests/`;
    - the configuration header;
    - the README status line.
-3. New CHANGELOG entry; README / docs updated (status, verification, evidence levels).
-4. PDF: `python docs/src/build_findings_pdf.py` (version and date are read from the module).
-5. Release notes: `.github/release-notes/v<version>.md` (English, GitHub Flavored Markdown, links to `/blob/v<version>/...`).
-6. `.\tools\Invoke-SoaStaticChecks.ps1`. Everything must pass; the hygiene check (H6) verifies that the version is consistent everywhere.
+3. Add a CHANGELOG entry and update the README and docs (status, verification, evidence levels).
+4. Rebuild the PDF: `python docs/src/build_findings_pdf.py` (version and date are read from the module).
+5. Write the release notes: `.github/release-notes/v<version>.md`. Use English and GitHub Flavored Markdown, with links to `/blob/v<version>/...`. Release notes of published versions are history: never change them afterwards; corrections go into the next version.
 
-## 2. Commit and tag (signed)
+## 2. Local checks
+
+```powershell
+.\tools\Invoke-SoaStaticChecks.ps1        # from PowerShell 7 on Windows: also runs tests + claims under Windows PowerShell 5.1
+```
+
+Everything must pass. The hygiene check (H6) verifies that the version is consistent everywhere. If you run it on Linux or macOS, Windows PowerShell 5.1 is not tested locally, and the CI job is the only 5.1 test.
+
+## 3. Push the commit, without the tag
 
 ```powershell
 git add -A
 git commit -s -m "Release <version>: <summary>"
-git tag -s v<version> -m "cloudsync-soa-toolkit <version>"     # signed tag (tag.gpgsign = true signs automatically)
-git push origin main --follow-tags
+git push origin main
 ```
 
-Verify locally: `git verify-tag v<version>` (needs `gpg.ssh.allowedSignersFile`). CI must be green on the pushed commit.
+## 4. Gate: CI must be green
 
-## 3. Build the asset from the tag
+Both jobs, *PowerShell 7 - all static checks* and *Windows PowerShell 5.1 - tests and claims*, must succeed **for this commit**. Check in the Actions tab or with the GitHub CLI:
+
+```powershell
+gh run list --commit (git rev-parse HEAD) --json name,status,conclusion
+```
+
+If a job fails, fix it, commit again and wait for green. Do not create a tag before that.
+
+## 5. Signed tag on exactly this commit
+
+```powershell
+git tag -s v<version> -m "cloudsync-soa-toolkit <version>"     # tag.gpgsign = true signs automatically
+git push origin v<version>
+git verify-tag v<version>                                       # needs gpg.ssh.allowedSignersFile
+```
+
+A tag that has been pushed but **not yet released** may still be deleted and recreated if a problem shows up (`git tag -d v<version>`, then `git push origin :refs/tags/v<version>`). Once the release is published, never move or delete the tag.
+
+## 6. Build the asset from the tag
 
 ```powershell
 .\tools\Build-SoaRelease.ps1 -Ref v<version>
 ```
 
-The script creates `cloudsync-soa-toolkit-<version>.zip` from `git archive` of the tag. `export-ignore` paths are left out. The zip contains `SHA256SUMS.txt`, which `Export-SoaReport.ps1` uses to detect modified scripts. A `.sha256` file is written next to the zip.
+- The script asks the GitHub CLI for the CI runs of the tagged commit and **refuses to build** unless all of them succeeded.
+- `-SkipCiCheck` exists only for the case that the CLI is unavailable. Then verify CI manually (step 4).
+- It creates `cloudsync-soa-toolkit-<version>.zip` from `git archive` of the tag (`export-ignore` paths are left out), with `SHA256SUMS.txt` inside and a `.sha256` file next to it.
 
-## 4. GitHub release
+## 7. GitHub release
 
-1. *Draft a new release*, then choose the **existing** tag `v<version>`. If you let GitHub create the tag, it is an unsigned lightweight tag.
+1. *Draft a new release*, then choose the **existing** tag `v<version>`. If GitHub creates the tag itself, it is an unsigned lightweight tag.
 2. Title: `v<version> – <short summary>`, at most about 60 characters.
 3. Text: content of `.github/release-notes/v<version>.md`.
 4. Upload the zip, then compare the digest GitHub shows with the `.sha256` file.
-5. Set as the latest release, not a pre-release. Publish.
+5. **Last check before publishing:** CI of the tagged commit is green, the tag is signed, the digest matches.
+6. Set as the latest release, not a pre-release. Publish.
 
-## 5. After the release
+## 8. After the release
 
 - Check that the README renders, the release is marked *Immutable* and the asset digest matches.
 - New observations go to `docs/EVIDENCE.md`. Validation results are recorded in `docs/VALIDATION.md`.
+
+## If a published release turns out to be broken
+
+The release cannot be replaced, and that is intended: users and reviewers rely on a version always meaning the same code.
+
+1. Fix it forward: prepare a patch version with the fix and a *Fixed* entry that names the affected version. Run it through all gates above.
+2. In the broken release, edit **only the release text**, if GitHub allows it for immutable releases. Add a line at the top: "Superseded by v<new version> because of <problem>; do not use." Do not change the tag, the assets or the file in `.github/release-notes/`.
+3. If the problem is security-relevant, also follow [SECURITY.md](../SECURITY.md) (advisory).
 
 ## One-time setup (maintainer)
 
@@ -53,9 +99,10 @@ The script creates `cloudsync-soa-toolkit-<version>.zip` from `git archive` of t
   git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v<version>
   ```
 - **Repository settings:**
-  - branch protection on `main`: signed commits, CI required, no force pushes;
+  - branch protection on `main`: signed commits, both CI jobs required as status checks, no force pushes;
   - immutable releases on;
   - private vulnerability reporting on;
   - Dependabot for GitHub Actions.
 - **CI hardening:** pin `actions/checkout` in `.github/workflows/ci.yml` to the full commit SHA of the release in use, with the version as a comment.
+- **GitHub CLI** (`gh auth login`) on the release workstation, for the CI gate in step 6.
 - **Local forbidden terms:** create `tools/forbidden-terms.local.txt` (git-ignored) with company domains, internal host names and other identifiers. `Test-SoaRepoHygiene.ps1` (H5) then blocks them.

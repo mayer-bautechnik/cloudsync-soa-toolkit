@@ -34,7 +34,7 @@
     Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -50,11 +50,13 @@ param(
 
     [string] $OutputPath,
 
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')
+    [string] $ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 #region --- Context --------------------------------------------------------------------------------
 $cfg      = Import-SoaConfig -Path $ConfigPath
@@ -68,7 +70,7 @@ $since    = (Get-Date).AddHours(-$EventHours)
 $isInteractive = -not $Quiet
 
 $deployment = $null
-$depFile = Join-Path $PSScriptRoot 'deployment.json'
+$depFile = Join-Path $ScriptRoot 'deployment.json'
 if (Test-Path -LiteralPath $depFile) { try { $deployment = Get-Content -LiteralPath $depFile -Raw | ConvertFrom-Json } catch { } }
 $manifest = $null
 if ($Scope -eq 'All') { try { $manifest = Get-SoaManifest -Config $cfg } catch { } }
@@ -587,6 +589,7 @@ if ($Scope -eq 'All') {
         $htmlPath = Join-Path $OutputPath "monitor_$stamp.html"
         ConvertTo-Html -Head (Get-SoaHtmlStyle) -Body $body -Title 'SOA Toolkit monitoring' | Set-Content -Path $htmlPath -Encoding UTF8
         Write-Host "Report: $htmlPath" -ForegroundColor Cyan
+        Write-Host "        (contains names of your environment - share it only through Export-SoaReport.ps1)" -ForegroundColor DarkGray
     }
 }
 if ($isInteractive) { Write-Host ''; Write-Host ("Overall: {0}" -f $overall) -ForegroundColor (Get-SoaStatusColor $overall) }

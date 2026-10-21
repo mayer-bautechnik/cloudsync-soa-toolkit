@@ -59,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.
@@ -78,11 +78,13 @@ param(
     [switch] $Refresh,
     [switch] $Force,
 
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1')
+    [string] $ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 
 if (-not $Step -and -not $Preset) { throw 'Pass -Step and/or -Preset Decommission|Full.' }
 $presets = @{
@@ -421,7 +423,7 @@ foreach ($current in ($order | Where-Object { $selected -contains $_ })) {
             $entry = Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' | Select-Object -First 1
             if (-not $g) { Write-SoaLine SKIP 'not found'; break }
             if (-not (Test-Owned $entry $g.Description)) { Write-SoaLine SKIP 'not created by the toolkit'; break }
-            & (Join-Path $PSScriptRoot 'Set-SoaDiagnosticsGpo.ps1') -Action Remove -ConfigPath $ConfigPath -Refresh:$Refresh -WhatIf:$WhatIfPreference -Confirm:$false
+            & (Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1') -Action Remove -ConfigPath $ConfigPath -Refresh:$Refresh -WhatIf:$WhatIfPreference -Confirm:$false
             if (-not $WhatIfPreference) { Remove-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics'; Save-Manifest }
         }
 

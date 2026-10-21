@@ -36,7 +36,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
    ACEs and SACL entries are identified by their exact fingerprint (`Test-SoaSaclFingerprint`).
 4. **Idempotent and reversible.** Every write path supports `-WhatIf`, writes only on deviation and keeps the first previous value in the manifest. SCRIL is never removed automatically.
 5. **Scope.** Users are in scope only when they have the anchor `User_*` **and** `msDS-ObjectSoa = Cloud`. Non-LDAP and DC-internal write paths are out of scope (decision D-15).
-6. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses, no unredacted reports. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep extra terms in `tools/forbidden-terms.local.txt` (git-ignored).
+6. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses. Reports from environments enter the repository only as reviewed, anonymized `Export-SoaReport.ps1` output (docs/evidence/), never raw. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep extra terms in `tools/forbidden-terms.local.txt` (git-ignored).
 7. **Conventions.**
    - Admin-facing text is English.
    - PowerShell files are UTF-8 with BOM and CRLF; Markdown, HTML, YAML and Python use LF.
@@ -51,7 +51,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 .\tools\Invoke-SoaStaticChecks.ps1      # parser, PSScriptAnalyzer, tests, security claims, hygiene
 ```
 
-CI runs the same checks on PowerShell 7 and Windows PowerShell 5.1. Behaviour in a real domain can only be verified in a lab (docs/VALIDATION.md). Say so instead of claiming it.
+CI runs the same checks on PowerShell 7 and Windows PowerShell 5.1. A release is tagged and published only after both CI jobs are green for the release commit ([docs/RELEASING.md](docs/RELEASING.md)). Behaviour in a real domain can only be verified in a lab (docs/VALIDATION.md). Say so instead of claiming it.
 
 ## Commits
 

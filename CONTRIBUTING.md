@@ -22,16 +22,23 @@ git commit -s -m "Short description"
 
 The sign-off line (`Signed-off-by: Name <email>`) confirms that you have the right to submit the change under the project's license.
 
-## Reporting issues
+## Reporting issues, lab results and questions
 
-- Use the issue forms (*Bug report*, *Lab validation result*). Create the attachment with `scripts\Export-SoaReport.ps1` (`-Purpose BugReport -Description '...'` for bugs). The tool collects all required facts and anonymizes them; you review the result before packaging. See [docs/REPORTING.md](docs/REPORTING.md).
-- **Never post identifying data**: no tenant IDs, domain names, user names, SIDs or GUIDs of your environment, and no unreviewed reports or event logs. Never attach the pseudonym map.
-- For security-relevant findings see [SECURITY.md](SECURITY.md).
+| What | Where | Attachment |
+|---|---|---|
+| Bug | issue form *Bug report* | `.\Export-SoaReport.ps1 -Purpose BugReport -Description '...'`, reviewed, then `-Package` |
+| Lab validation result (L1-L20) | issue form *Lab validation result* | `.\Export-SoaReport.ps1`, reviewed, then `-Package` |
+| Question or idea | issue form *Question or idea* | usually none |
+| Security-relevant finding | **private** vulnerability report ([SECURITY.md](SECURITY.md)), never a public issue | anonymized package if needed |
+
+- `Export-SoaReport.ps1` collects every fact a report needs (version, OS builds and updates, agent version, topology, policy mode, script integrity) and replaces identifiers by pseudonyms. You review the folder before packaging. Details: [docs/REPORTING.md](docs/REPORTING.md).
+- **Do not attach the raw reports** of `Test-SoaPrerequisites.ps1`, `Watch-CloudUserConformance.ps1`, `Get-SoaEnforcementImpact.ps1` or `Test-SoaBehavior.ps1`, or event logs. They contain names of your environment; the export includes them anonymized.
+- **Never post identifying data**: no tenant IDs, domain, host or user names, SIDs or GUIDs of your environment. Never attach the pseudonym map (`private\*.map.csv`).
 
 ## Changes
 
 - Read [AGENTS.md](AGENTS.md) (rules that must stay true) and, for design questions, [docs/DECISIONS.md](docs/DECISIONS.md).
-- Run `.\tools\Invoke-SoaStaticChecks.ps1` before you open a pull request. It runs the parser, PSScriptAnalyzer, the tests, the security claims and the hygiene checks; CI runs the same checks.
+- Run `.\tools\Invoke-SoaStaticChecks.ps1` before you open a pull request. It runs the parser, PSScriptAnalyzer, the tests, the security claims and the hygiene checks. Started from PowerShell 7 on Windows, it also runs the tests under Windows PowerShell 5.1. CI runs the same checks on both versions, and a pull request is merged only when CI is green.
 - Target Windows PowerShell 5.1 **and** PowerShell 7.x. Check with PSScriptAnalyzer using `PSScriptAnalyzerSettings.psd1` (the VS Code workspace settings in `.vscode/` use it automatically and enable `git.alwaysSignOff`).
 - Follow the naming scheme: `Soa*` = toolkit / infrastructure / Microsoft feature, `CloudUser*` = target state of the users; approved PowerShell verbs.
 - Put shared logic into `SoaToolkit.psm1`.

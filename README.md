@@ -4,7 +4,7 @@
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.2 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.0.3 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -276,7 +276,7 @@ These findings have not been reported upstream yet. If you can reproduce them, c
 |---|---|
 | Findings about Microsoft's features (K1-K21) | *Documented* findings link their sources. *Observed* findings were measured **manually by the maintainer** in a lab domain ([docs/EVIDENCE.md](docs/EVIDENCE.md); completing the records with dates and builds is in progress) |
 | Static quality of the 2.x scripts | parser, PSScriptAnalyzer (PowerShell 5.1 and 7 syntax), unit tests, an end-to-end test of the report tool against a mocked AD module, and the security-claim checker. They run in CI on every change |
-| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.2 (2026-10-21) |
+| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.3 (2026-10-21) |
 
 Open items of the lab validation ([docs/VALIDATION.md](docs/VALIDATION.md)):
 
@@ -363,6 +363,7 @@ Retrieved = date the source was read for this project.
 
 - **Licensors / authors:** GEBR. MAYER GmbH + Co. KG (GEBR. MAYER Bautechnik) and Johannes Lämmermann.
 - **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Bugs, lab results, questions:** issue forms. Attach a reviewed, anonymized package from `Export-SoaReport.ps1` ([docs/REPORTING.md](docs/REPORTING.md)). Security-relevant findings go only through the private vulnerability report ([SECURITY.md](SECURITY.md)).
 - **Repository:** https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 
 ### License

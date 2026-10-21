@@ -11,15 +11,18 @@
     Used by the CI workflow (.github/workflows/ci.yml) and before every release (docs/RELEASING.md).
     PSScriptAnalyzer is used if installed (Install-Module PSScriptAnalyzer -Scope CurrentUser); otherwise skipped
     with a warning unless -RequireAnalyzer is set.
+    Started from PowerShell 7 on Windows, the tests and the claims check run a second time under Windows PowerShell 5.1
+    (powershell.exe), because the scheduled tasks use 5.1.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Exit code 0 = all checks passed.
 #>
 [CmdletBinding()]
 param([switch] $RequireAnalyzer)
 $ErrorActionPreference = 'Stop'
-$root = Split-Path $PSScriptRoot -Parent
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+$root = Split-Path $ScriptRoot -Parent
 $results = [ordered]@{}
 $ps = @(Get-ChildItem -LiteralPath $root -Recurse -File -Include *.ps1, *.psm1, *.psd1 | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' })
 
@@ -46,11 +49,21 @@ else { Write-Warning 'PSScriptAnalyzer not installed - skipped'; $results['PSScr
 
 # 3-5. Unit tests, claims, hygiene (separate processes: clean scope, own exit code)
 $exe = (Get-Process -Id $PID).Path
-foreach ($s in @(@('Unit tests', (Join-Path $root 'tests\Invoke-SoaUnitTests.ps1')), @('Security claims', (Join-Path $PSScriptRoot 'Test-SoaSecurityClaims.ps1')), @('Repository hygiene', (Join-Path $PSScriptRoot 'Test-SoaRepoHygiene.ps1')))) {
+foreach ($s in @(@('Unit tests', (Join-Path (Join-Path $root 'tests') 'Invoke-SoaUnitTests.ps1')), @('Security claims', (Join-Path $ScriptRoot 'Test-SoaSecurityClaims.ps1')), @('Repository hygiene', (Join-Path $ScriptRoot 'Test-SoaRepoHygiene.ps1')))) {
     Write-Host ''; Write-Host "== $($s[0])" -ForegroundColor Cyan
     & $exe -NoProfile -ExecutionPolicy Bypass -File $s[1]
     $results[$s[0]] = ($LASTEXITCODE -eq 0)
 }
+
+# 6. Windows PowerShell 5.1 as well, when started from PowerShell 7 on Windows
+$desktop = if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' } else { $null }
+if ($PSVersionTable.PSEdition -eq 'Core' -and $IsWindows -and $desktop -and (Test-Path -LiteralPath $desktop)) {
+    foreach ($s in @(@('Unit tests (Windows PowerShell 5.1)', (Join-Path (Join-Path $root 'tests') 'Invoke-SoaUnitTests.ps1')), @('Security claims (Windows PowerShell 5.1)', (Join-Path $ScriptRoot 'Test-SoaSecurityClaims.ps1')))) {
+        Write-Host ''; Write-Host "== $($s[0])" -ForegroundColor Cyan
+        & $desktop -NoProfile -ExecutionPolicy Bypass -File $s[1]
+        $results[$s[0]] = ($LASTEXITCODE -eq 0)
+    }
+} elseif ($PSVersionTable.PSEdition -ne 'Desktop') { Write-Host ''; Write-Host '  (Windows PowerShell 5.1 not available here - the CI job on Windows covers it)' -ForegroundColor DarkGray }
 
 Write-Host ''
 foreach ($k in $results.Keys) { Write-Host ("[{0}] {1}" -f $(if ($results[$k]) { 'PASS' } else { 'FAIL' }), $k) -ForegroundColor $(if ($results[$k]) { 'Green' } else { 'Red' }) }

@@ -4,7 +4,7 @@
 # Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 @{
     # =====================================================================================================
-    # SOA Toolkit configuration (cloudsync-soa-toolkit 2.0.2)
+    # SOA Toolkit configuration (cloudsync-soa-toolkit 2.0.3)
     # Used by every script of the toolkit. All values below are PLACEHOLDERS (contoso.com) - adjust them.
     # Keys that are omitted fall back to the defaults documented in SoaToolkit.psm1 ($script:SoaConfigDefaults).
     # =====================================================================================================

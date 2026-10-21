@@ -9,13 +9,14 @@
     domain fabrikam.local). Called by Invoke-SoaUnitTests.ps1; exit code = number of failed assertions.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string] $WorkPath)
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot -Parent
-$env:PSModulePath = (Join-Path $PSScriptRoot 'mocks') + [IO.Path]::PathSeparator + $env:PSModulePath
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+$repo = Split-Path $ScriptRoot -Parent
+$env:PSModulePath = (Join-Path $ScriptRoot 'mocks') + [IO.Path]::PathSeparator + $env:PSModulePath
 $fail = 0
 function Assert-Test($Condition, [string]$Message) { if ($Condition) { Write-Host "PASS export: $Message" -ForegroundColor Green } else { Write-Host "FAIL export: $Message" -ForegroundColor Red; $script:fail++ } }
 
@@ -82,7 +83,7 @@ $cfgPath = Join-Path $WorkPath 'cfg.psd1'
 }
 "@ | Set-Content -LiteralPath $cfgPath
 
-$export = Join-Path $repo 'scripts/Export-SoaReport.ps1'
+$export = Join-Path (Join-Path $repo 'scripts') 'Export-SoaReport.ps1'
 & $export -Record L16 -Result PASS -Note 'department change for jdoe arrived on SRV-DC1' -ConfigPath $cfgPath 6>$null | Out-Null
 & $export -NoRemote -Days 400 -AdditionalTerms 'Fuerth' -ConfigPath $cfgPath 6>$null | Out-Null
 $bundle = @(Get-ChildItem -LiteralPath (Join-Path $rp 'Export') -Directory | Where-Object { $_.Name -like 'SoaReport_*' })[0].FullName

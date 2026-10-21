@@ -10,7 +10,9 @@
 .DESCRIPTION
     Source of the files:
       - inside a git work tree: 'git archive' of -Ref (default HEAD) - honours export-ignore in .gitattributes and
-        contains exactly what is committed (run it on the signed tag: -Ref v2.0.2)
+        contains exactly what is committed (run it on the signed tag: -Ref v<version>)
+      - CI gate: the GitHub CLI (gh) is asked for the workflow runs of the commit; the build is refused unless all
+        of them completed successfully (-SkipCiCheck only when gh is unavailable and CI was verified manually)
       - otherwise: the working folder minus the export-ignore paths and local files (.git, reports, *.local.*)
     Then:
       - SHA256SUMS.txt (sha256sum format) for every file -> Export-SoaReport.ps1 compares the deployed scripts with it
@@ -23,19 +25,24 @@
 .PARAMETER OutputPath
     Target folder (default: the parent folder of the repository).
 
+.PARAMETER SkipCiCheck
+    Do not ask GitHub for the CI result of the commit. Only when the GitHub CLI is not available - verify CI manually.
+
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Run tools\Invoke-SoaStaticChecks.ps1 first. See docs/RELEASING.md.
 #>
 [CmdletBinding()]
 param(
     [string] $Ref = 'HEAD',
-    [string] $OutputPath
+    [string] $OutputPath,
+    [switch] $SkipCiCheck
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path $PSScriptRoot -Parent
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+$root = Split-Path $ScriptRoot -Parent
 if (-not $OutputPath) { $OutputPath = Split-Path $root -Parent }
-$version = if ((Get-Content -LiteralPath (Join-Path $root 'scripts\SoaToolkit.psm1') -Raw) -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
+$version = if ((Get-Content -LiteralPath (Join-Path (Join-Path $root 'scripts') 'SoaToolkit.psm1') -Raw) -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
 $name  = "cloudsync-soa-toolkit-$version"
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("soa-release-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $top   = Join-Path $stage 'cloudsync-soa-toolkit'
@@ -54,7 +61,18 @@ if ($inGit) {
         & tar -xf $tar -C $top
         if ($LASTEXITCODE) { throw 'tar extraction failed' }
         Remove-Item -LiteralPath $tar -Force
-        $commit = (& git rev-parse $Ref).Trim()
+        $commit = (& git rev-parse "$Ref^{commit}").Trim()
+        # CI gate (docs/RELEASING.md step 4/6): all workflow runs of this commit must have succeeded
+        if (-not $SkipCiCheck) {
+            if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI (gh) not found - install it and run gh auth login, or verify CI manually and use -SkipCiCheck.' }
+            $runsJson = & gh run list --commit $commit --json name,status,conclusion --limit 50
+            if ($LASTEXITCODE) { throw "gh run list failed for $commit (gh auth login?)" }
+            $runs = @($runsJson | ConvertFrom-Json | ForEach-Object { $_ })
+            if (-not $runs.Count) { throw "No CI run found for commit $commit - push the commit and wait for CI before building the release." }
+            $bad = @($runs | Where-Object { $_.status -ne 'completed' -or $_.conclusion -ne 'success' })
+            if ($bad.Count) { throw ("CI is not green for {0}: {1}" -f $commit.Substring(0, 12), (($bad | ForEach-Object { "$($_.name)=$($_.status)/$($_.conclusion)" }) -join ', ')) }
+            Write-Host ("CI gate : {0} run(s) successful for {1}" -f $runs.Count, $commit.Substring(0, 12)) -ForegroundColor Green
+        } else { Write-Warning 'CI gate skipped (-SkipCiCheck) - make sure both CI jobs are green for this commit.' }
     } finally { Pop-Location }
 } else {
     Write-Warning 'Not a git work tree - packaging the folder content (export-ignore emulated).'

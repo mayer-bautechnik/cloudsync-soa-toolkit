@@ -52,7 +52,7 @@
     .\Test-SoaPrerequisites.ps1 -EnforcementOnly -KirGpoName 'DC - KIR AD Object Enforcement'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.3 (2026-10-21)
     Complements Microsoft's Check-CloudSyncSOAPolicy.ps1, which only reads the domain-wide objects and the local
     diagnostics value and does not verify the enforcement engine per DC (upstream finding F3).
     Run as Domain Admin from the admin workstation with RSAT. WinRM (5985) and ADWS (9389) to every writable DC.
@@ -63,12 +63,14 @@ param(
     [string]   $KirGpoName,
     [string[]] $KirFeatureId,
     [switch]   $EnforcementOnly,
-    [string]   $ConfigPath = (Join-Path $PSScriptRoot 'SoaToolkit.config.psd1'),
+    [string]   $ConfigPath,
     [string]   $OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
+if (-not $ConfigPath) { $ConfigPath = Join-Path $ScriptRoot 'SoaToolkit.config.psd1' }
+Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameChecking
 $cfg = $null
 if (-not $EnforcementOnly) {
     if (Test-Path -LiteralPath $ConfigPath) { $cfg = Import-SoaConfig -Path $ConfigPath }
@@ -892,4 +894,5 @@ Write-Section 'Reports'
 Write-Host "CSV  : $csvPath"
 Write-Host "JSON : $jsonPath"
 Write-Host "HTML : $htmlPath"
+Write-Host "       (contains names of your environment - share it only through Export-SoaReport.ps1)" -ForegroundColor DarkGray
 #endregion

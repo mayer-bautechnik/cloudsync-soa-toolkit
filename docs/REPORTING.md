@@ -75,10 +75,15 @@ The same original always gets the same pseudonym within one report.
 4. Delete files you do not want to share. The report stays usable.
 5. Package.
 
+## Raw reports of the other scripts
+
+`Test-SoaPrerequisites.ps1`, `Watch-CloudUserConformance.ps1`, `Get-SoaEnforcementImpact.ps1` and `Test-SoaBehavior.ps1` write HTML / CSV / JSON reports for **internal** use. They contain domain, host and user names. Do not share them directly. `Export-SoaReport.ps1` includes their content in anonymized form, and the scripts point this out when they finish.
+
 ## Where to send it
 
 | Kind | Channel |
 |---|---|
 | Lab validation result | GitHub issue form *Lab validation result*, or directly to the maintainer |
 | Bug | GitHub issue form *Bug report* (the issue text describes the problem; attach the zip) |
+| Question or idea | GitHub issue form *Question or idea* (no environment data needed) |
 | Security-relevant finding | **private** vulnerability report ([SECURITY.md](../SECURITY.md)), never a public issue |
