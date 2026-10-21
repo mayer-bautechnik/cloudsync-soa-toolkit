@@ -1,8 +1,10 @@
 # cloudsync-soa-toolkit
 
+![cloudsync-soa-toolkit: passwordless cloud users in Active Directory, always able to sign in](.github/assets/social-preview-1820x640.png)
+
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.0 (2026-10-20).** Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.0.1 (2026-10-20).** Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 

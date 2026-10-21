@@ -3,3 +3,9 @@
 *.psd1 text eol=crlf
 *.md   text eol=lf
 *.pdf  binary
+*.png  binary
+*.jxl  binary
+*.html text eol=lf
+
+# Repository presentation only - not part of source archives
+.github/assets/** export-ignore
