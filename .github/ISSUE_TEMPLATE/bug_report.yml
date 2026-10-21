@@ -1,0 +1,46 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+name: Bug report
+description: Something in the toolkit does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security-relevant?** Do not open a public issue - use the private vulnerability report (Security tab).
+        Create the attachment with `.\Export-SoaReport.ps1 -Purpose BugReport -Description '...'`, review the folder (README-FIRST.md) and package it with `-Package`. Never attach the pseudonym map. See docs/REPORTING.md.
+  - type: input
+    id: version
+    attributes:
+      label: Toolkit version
+      placeholder: "2.0.2"
+    validations:
+      required: true
+  - type: input
+    id: step
+    attributes:
+      label: Script and step / suite / trigger
+      placeholder: "Install-SoaToolkit.ps1 -Step AuditConfig"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did, what you expected, what happened
+      description: Use placeholders (contoso.com) instead of real names.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Anonymized report
+      description: Attach the zip created with Export-SoaReport.ps1 -Package, or paste the relevant part of report.md.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I reviewed the attachment; it contains no real domain, host, user or company names, and not the pseudonym map.
+          required: true

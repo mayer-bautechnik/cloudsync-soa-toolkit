@@ -18,8 +18,18 @@ behavior-findings.json
 *.local.psd1
 SoaToolkit.config.*.psd1
 
+# Export-SoaReport.ps1 output (report folders, private pseudonym maps) and local-only files
+Export/
+Validation/
+SoaReport_*/
+private/
+*.map.csv
+*.local.txt
+tools/forbidden-terms.local.txt
+
 # Release packages and signing material
 *.zip
+*.sha256
 *.pfx
 *.p12
 *.cer

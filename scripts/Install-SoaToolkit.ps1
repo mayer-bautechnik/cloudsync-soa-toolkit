@@ -24,7 +24,9 @@
                       GPO per OS with a WMI filter on the build number. A DC restart is required afterwards.
       DiagnosticsGpo  NTDS diagnostics '2 Security Events' = 1 (events 3095/3097/3098) via Set-SoaDiagnosticsGpo.ps1
       AuditConfig     checks the effective audit policy on every DC; creates a GPO only for missing subcategories;
-                      SACL for writes to msDS-ObjectSoa (event 5136 = trigger for SOA-converted users)
+                      always sets the toolkit's own narrow SACL entry for writes to msDS-ObjectSoa on every write-scope
+                      container (event 5136 = trigger for SOA-converted users); broader rules of others are reported,
+                      never relied upon
       EnableRolling   msDS-ExpirePasswordsOnSmartCardOnlyAccounts = TRUE (only if not set; needs DFL >= 2016)
       Policy          CN=Cloud (AD object enforcement policy) in mode Audit - the same object Microsoft's
                       Set-CloudSyncSOAPolicy.ps1 creates, but the container CN=SOA-Policies is NOT created (it must
@@ -58,7 +60,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -115,6 +117,11 @@ if ($Step -contains 'All') {
               'Delegate', 'AllowList', 'DeployTasks', 'Verify') + @($Step | Where-Object { $_ -ne 'All' })
     if ($KirMsi2022 -or $KirMsi2025) { $Step += 'KirGpo' }
 }
+
+# Run log (evaluated by Export-SoaReport.ps1: idempotency, planned vs. applied changes)
+$runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+Write-InstallLog ("RUN {0} START tool=Install version={1} steps={2} whatif={3}" -f $runId, $ver.Version, ((@($Step) | Select-Object -Unique) -join ','), [bool]$WhatIfPreference)
+Set-SoaLineLog -Path $installLog -Prefix "RUN $runId"
 
 Write-SoaSection ("SOA Toolkit {0} - Install - domain {1} - PDC emulator {2}" -f $ver.Version, $ctx.DnsRoot, $pdc)
 Write-Host ("Writable DCs : {0}" -f ($ctx.WritableDcs -join ', '))
@@ -609,25 +616,20 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 Write-SoaLine PASS 'All required audit subcategories are effective on every writable DC - no audit GPO needed.'
             }
 
-            # SACL: writes to msDS-ObjectSoa (Success) on user objects below the write scope -> event 5136
+            # SACL: writes to msDS-ObjectSoa (Success) on user objects below the write scope -> event 5136.
+            # The toolkit ALWAYS sets its own narrow entry (identified by its fingerprint, see Test-SoaSaclFingerprint)
+            # and never relies on broader rules of others (e.g. a diagnostic "Write all properties" SACL).
             $agents = @(Get-SoaAgentGmsa -Config $cfg -Context $ctx -Quiet)
             $scope  = @(Get-SoaWriteScope -Config $cfg -Context $ctx -AgentGmsa $agents)
             $attr   = Get-SoaAttributeGuid -LdapDisplayName 'msDS-ObjectSoa' -Context $ctx
-            $every  = [Security.Principal.SecurityIdentifier]$S.Everyone
             $added  = @()
             foreach ($dn in $scope) {
-                $acl = Get-Acl -Path "$drive\$dn" -Audit
-                $covered = @($acl.GetAuditRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
-                    ($_.IdentityReference.Value -in $S.Everyone, $S.AuthenticatedUsers) -and
-                    (($_.AuditFlags -band [Security.AccessControl.AuditFlags]::Success) -ne 0) -and
-                    (($_.ActiveDirectoryRights -band [DirectoryServices.ActiveDirectoryRights]::WriteProperty) -ne 0) -and
-                    ($_.ObjectType -eq [guid]::Empty -or $_.ObjectType -eq $attr) -and
-                    ("$($_.InheritanceType)" -in 'All', 'Descendents') -and
-                    ($_.InheritedObjectType -eq [guid]::Empty -or $_.InheritedObjectType -eq $G.UserClass)
-                })
-                if ($covered.Count) { Write-SoaLine SAME "SACL on $dn already audits writes to msDS-ObjectSoa"; continue }
+                $st = Get-SoaSaclState -Dn $dn -AttributeGuid $attr -Drive $drive
+                foreach ($b in @($st.Broad)) { Write-SoaLine INFO "SACL on ${dn}: other rule also audits msDS-ObjectSoa writes (not relied upon; remove it if it was only for diagnosis): $b" }
+                if ($st.Toolkit) { Write-SoaLine SAME "SACL on ${dn}: toolkit entry present (Everyone, Success, Write msDS-ObjectSoa, descendant users)"; continue }
                 if ($Cmdlet.ShouldProcess($dn, 'Add SACL: Everyone, Success, Write msDS-ObjectSoa, descendant users')) {
-                    $acl.AddAuditRule((New-Object DirectoryServices.ActiveDirectoryAuditRule($every, 'WriteProperty', 'Success', $attr, 'Descendents', $G.UserClass)))
+                    $acl = $st.Acl
+                    $acl.AddAuditRule((New-SoaSaclRule -AttributeGuid $attr))
                     Set-Acl -Path "$drive\$dn" -AclObject $acl
                     Write-SoaLine ADD "SACL on ${dn}: Success, Write msDS-ObjectSoa (descendant users)"
                     $added += $dn
@@ -1178,5 +1180,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
     }
     Write-InstallLog "Step $current finished"
 }
+Set-SoaLineLog
+Write-InstallLog "RUN $runId END"
 Write-Host ''
 Write-Host ("Manifest: {0}" -f (Get-SoaManifestPath -Config $cfg)) -ForegroundColor Cyan

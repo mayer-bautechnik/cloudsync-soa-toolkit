@@ -107,7 +107,7 @@ cd .\scripts
 | `BatchLogonGpo` | GPO `SOA Toolkit - DC - Batch Logon` (+ `… - Agent Hosts - …` if needed), link order 1 | User rights from GPOs are **not merged**. The GPO contains the **current effective** list of every host **plus** the gMSA. Check with `-Refresh` / Verify. |
 | `KirGpo` | GPO(s) `SOA Toolkit - DC - KIR AD Object Enforcement (WS20xx)`, WMI filter(s), ADMX/ADML | **Restart the DCs afterwards, one at a time** |
 | `DiagnosticsGpo` | GPO `SOA Toolkit - DC - NTDS Security Diagnostics` | renames and adopts the 1.x GPO if present |
-| `AuditConfig` | GPO `SOA Toolkit - DC - Audit` **only if** a required subcategory is missing; SACL on the write scope | never reduces existing auditing |
+| `AuditConfig` | GPO `SOA Toolkit - DC - Audit` **only if** a required subcategory is missing; **always** the toolkit's own narrow SACL entry on every write-scope container (Everyone, Success, Write `msDS-ObjectSoa`, descendant user objects) | never reduces existing auditing; broader SACL rules of others (e.g. a diagnostic "Write all properties") are reported as INFO and **not** relied upon |
 | `EnableRolling` | `msDS-ExpirePasswordsOnSmartCardOnlyAccounts = TRUE` if not set | previous value is recorded |
 | `Policy` | `CN=Cloud` in mode **Audit** | skipped with a warning until the engine has created the container (after the restart) |
 | `Groups` | `SOA-CloudUsers-PSO`, `-Exclude`, `-Pilot` | |
@@ -148,6 +148,10 @@ Optional, to re-confirm automatic rolling in your environment:
 ```
 
 Emergency rollback of enforcement: `.\Uninstall-SoaToolkit.ps1 -Step SetModeAudit`.
+
+### 5.1 Validate the installation
+
+Work through the checklist [VALIDATION.md](VALIDATION.md) (L1-L20) and record what the toolkit cannot observe with `.\Export-SoaReport.ps1 -Record <Lx> -Result <PASS|FAIL> -Note '...'`. `.\Export-SoaReport.ps1` shows the status of every item and creates an anonymized report.
 
 ## 6. Monitoring integration
 
@@ -197,4 +201,19 @@ All of them carry the marker **`[SoaToolkit] Managed by SOA Toolkit - do not mod
 | Tasks | `\SoaToolkit\CloudUserConformance-Event`, `…-Reconcile`, `\SoaToolkit\Monitor` | task description |
 | Files | `%ProgramFiles%\SoaToolkit\*`, `%ProgramData%\SoaToolkit\*` | file header |
 | Event log | `SoaToolkit` | – |
-| ACEs / SACL entries | trustee = toolkit gMSA / Everyone (msDS-ObjectSoa) | recorded in the manifest |
+| Delegation ACEs | trustee = toolkit gMSA (the trustee carries the marker) | recorded in the manifest |
+| SACL entry | exact fingerprint (see below) | recorded in the manifest (kind `Sacl`) |
+
+### 9.1 Changes that cannot carry a marker
+
+Active Directory has no description field for access-control entries, audit entries, attribute values or group memberships. The toolkit therefore identifies its own changes like this:
+
+| Change | Identification | Removal |
+|---|---|---|
+| Delegation ACEs on the write scope | trustee = toolkit gMSA (marked object) | `Uninstall-SoaToolkit.ps1 -Step RemoveDelegation` removes every ACE of that trustee |
+| SACL entry for `msDS-ObjectSoa` | **exact fingerprint**: trustee Everyone (`S-1-1-0`), audit *Success* only, right *WriteProperty* only, object type = schemaIDGUID of `msDS-ObjectSoa`, inheritance *Descendents*, inherited object type = `user`, explicit; plus the manifest | `-Step RemoveAudit` removes only entries with exactly this fingerprint, and only on the containers the manifest lists |
+| Domain setting `msDS-ExpirePasswordsOnSmartCardOnlyAccounts` | manifest (previous value) | `-Step RestoreRolling` restores the previous value |
+| User attributes (SCRIL, PNE) and PSO group membership | target state + manifest of the conformance runs; user objects are deliberately **not** marked (Cloud Sync owns them) | `-Step RevertUsers` (explicit, with warning) |
+| ADMX / ADML copied to the central store | Microsoft files, copied unchanged and therefore not marked; path + hash recorded in the manifest (kind `AdmxFiles`) | `-Step RemoveKirGpo -RemoveAdmx`, only if the file is unchanged |
+
+The toolkit **never** relies on audit or access rules it did not create. Broader rules that also produce event 5136 (for example a diagnostic SACL "Everyone, Write all properties, Success + Failure") are reported by `AuditConfig` and by the monitor check `AUD-SACL-OTHER`. If they were only created for a diagnosis, remove them; the toolkit entry stays in place.

@@ -6,7 +6,8 @@
 - [4. What can still deviate under Enforced mode](#what-can-still-deviate-under-enforced-mode)
 - [5. Monitoring](#monitoring)
 - [6. Rollback and decommissioning](#rollback-and-decommissioning)
-- [7. Troubleshooting](#troubleshooting)
+- [7. Reports for validation and support](#reports-for-validation-and-support)
+- [8. Troubleshooting](#troubleshooting)
 
 ---
 
@@ -172,11 +173,12 @@ Enforced mode freezes **marked user objects** against LDAP changes by identities
 | `POL-*` | policy present, mode, allow-list resolvable, agents + toolkit allow-listed, replicated |
 | `ROLL`, `PSO-*` | automatic rolling, PSO values / target / precedence |
 | `OBJ-*`, `GRP-DRIFT` | toolkit objects incl. marker, GPO link / version, PSO group drift |
+| `AUD-SACL`, `AUD-SACL-OTHER` | toolkit SACL entry for `msDS-ObjectSoa` on every write-scope container (FAIL if missing); other rules that also audit these writes (INFO, not relied upon). Only in `-Scope All` |
 | `USR-SCRIL`, `USR-PNE`, `USR-PSOGROUP`, `USR-RPSO`, `USR-WRITE`, `USR-LOCKED`, `USR-NOROLL`, `USR-ROLLPLS`, `USR-EXPIRED`, `USR-KERB-0x17/0x12/0x18`, `USR-NEVERREVEAL`, `USR-UNMARKED` | per-user evaluation |
 | `CKT-OBJECT`, `CKT-KEYAGE` | Cloud Kerberos Trust |
 | `TEST` | latest results of `Test-SoaBehavior.ps1` (interactive scope) |
 
-The scheduled monitor runs as the gMSA, which is not a local administrator. Checks that need administrative rights (effective audit policy, effective batch logon right) are performed by the interactive `-Scope All` run.
+The scheduled monitor runs as the gMSA, which is not a local administrator. Checks that need administrative rights (effective audit policy, effective batch logon right, SACLs - reading a SACL needs "Manage auditing and security log") are performed by the interactive `-Scope All` run and by `Install-SoaToolkit.ps1 -Step Verify`. Run one of them regularly (e.g. after changes to OUs or audit settings).
 
 ## Rollback and decommissioning
 
@@ -198,7 +200,7 @@ The scheduled monitor runs as the gMSA, which is not a local administrator. Chec
 | `RemoveAllowList` | toolkit gMSA (+ break-glass) removed from `msDS-Settings` | **must run before `RemoveGmsa`** (a stale SID makes the policy fail to load); agent SIDs are kept |
 | `RemovePolicy` | `CN=Cloud` deleted (only if created by the toolkit) | enforcement off |
 | `RemoveTasks` | journal / status / logs collected to `ReportPath\Uninstall\<host>`, then tasks, folder, scripts, data, event log removed | |
-| `RemoveAudit` | toolkit SACL entries and audit GPO removed | |
+| `RemoveAudit` | toolkit SACL entries (exact fingerprint, only on the containers in the manifest) and audit GPO removed | |
 | `RemoveDelegation` | all ACEs of the gMSA (and break-glass), Event Log Readers membership | ACEs on marked objects need Audit mode |
 | `RemoveBatchLogonGpo` | batch logon GPO(s) deleted; `-Refresh` verifies and cleans a remaining local entry on member servers | DCs fall back to the Default Domain Controllers Policy |
 | `RemoveKirGpo` | KIR GPO(s) + WMI filter(s) deleted; `-RemoveAdmx` deletes unchanged ADMX/ADML | engine off **after the next restart** of each DC |
@@ -231,11 +233,21 @@ The scheduled monitor runs as the gMSA, which is not a local administrator. Chec
 - the KDS root key (never delete it);
 - pre-existing GPOs, for example a manually created KIR GPO.
 
+## Reports for validation and support
+
+`Export-SoaReport.ps1` collects the validation status (L1-L20) or the data for a bug report into a local folder. It anonymizes identifiers, runs a leak check and packages only after your review. Read-only towards AD and hosts. Details: [REPORTING.md](REPORTING.md).
+
+```powershell
+.\Export-SoaReport.ps1                                                     # validation status L1-L20
+.\Export-SoaReport.ps1 -Purpose BugReport -Description 'what happened' -Days 7
+.\Export-SoaReport.ps1 -Package <folder>                                  # after the review
+```
+
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| Event task never starts | Audit "User Account Management" / "Directory Service Changes" (success) effective? SACL on the write scope? (`-Step AuditConfig`, `Watch -Scope All` → `DC-AUDIT`) |
+| Event task never starts | Audit "User Account Management" / "Directory Service Changes" (success) effective? Toolkit SACL entry on the write scope? (`-Step AuditConfig`, `Watch -Scope All` → `DC-AUDIT`, `AUD-SACL`). A broad foreign SACL is not enough once it is removed - the toolkit entry must be present |
 | Tasks fail with 0x8007052F / logon failure | gMSA batch logon right (`BATCH`), host in `SOA-Toolkit-Hosts`, `Test-ADServiceAccount` on the host |
 | `USR-WRITE` | user outside the write scope: extend `WriteScope` or move the user, then `-Step Delegate, DeployTasks` |
 | `USR-NOROLL` | the user signed in while expired but the secret was not rolled. Which sign-in path? Repeat `Test-SoaBehavior.ps1 -Suite RollingObserve` with that path |

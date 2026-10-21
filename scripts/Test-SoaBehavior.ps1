@@ -37,7 +37,7 @@
             behavior-findings.json and behavior-report.html
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT). WinRM to the DCs and agent hosts.
 #>
 [CmdletBinding()]
@@ -102,7 +102,7 @@ function Save-Finding([string]$Key, $Object) {
 function New-Finding([string]$Title, [string[]]$Summary, $Tables) { [pscustomobject]@{ Time = (Get-Date).ToString('s'); Title = $Title; Summary = @($Summary); Tables = $Tables } }
 
 function Save-TestResult([string]$Name, [string]$Status, [string]$Detail) {
-    $all = @(if (Test-Path -Path $statePath) { @(Get-Content -Path $statePath -Raw | ConvertFrom-Json) })
+    $all = @(Read-SoaJsonArray -Path $statePath)
     $all += [pscustomobject]@{ Test = $Name; Time = (Get-Date).ToString('s'); PolicyMode = (Get-SoaPolicyMode -Context $ctx); Status = $Status; Detail = $Detail; RunBy = "$env:USERDOMAIN\$env:USERNAME" }
     $all = @($all | Group-Object Test | ForEach-Object { $_.Group | Sort-Object Time -Descending | Select-Object -First 20 })
     ConvertTo-Json -InputObject $all -Depth 3 | Set-Content -Path $statePath -Encoding UTF8

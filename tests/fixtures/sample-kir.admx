@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitions revision="1.0" schemaVersion="1.0">
+  <policyNamespaces><target prefix="kir" namespace="Microsoft.Policies.Kir.Test"/></policyNamespaces>
+  <resources minRequiredRevision="1.0"/>
+  <policies>
+    <policy name="FeaturePreview_ADEnforcement" class="Machine" displayName="$(string.FP)" key="SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides">
+      <parentCategory ref="kir"/>
+      <supportedOn ref="windows:SUPPORTED_WindowsServer2022"/>
+      <enabledList>
+        <item key="SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" valueName="1234567890"><value><decimal value="1"/></value></item>
+        <item key="SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" valueName="987654321"><value><decimal value="1"/></value></item>
+      </enabledList>
+      <disabledList>
+        <item key="SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" valueName="1234567890"><value><decimal value="0"/></value></item>
+      </disabledList>
+    </policy>
+    <policy name="Other" class="Machine" displayName="Other" key="Software\Policies\X" valueName="Y"/>
+  </policies>
+</policyDefinitions>

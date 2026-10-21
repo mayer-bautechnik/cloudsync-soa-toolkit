@@ -32,7 +32,7 @@
     .\Set-SoaDiagnosticsGpo.ps1 -Action Status
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
     Run as Domain Admin with RSAT. All GPO operations target the PDC emulator. WinRM to the DCs for -Refresh / Status.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]

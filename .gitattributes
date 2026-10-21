@@ -6,6 +6,10 @@
 *.png  binary
 *.jxl  binary
 *.html text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.csv  text eol=lf
 
 # Repository presentation only - not part of source archives
 .github/assets/** export-ignore

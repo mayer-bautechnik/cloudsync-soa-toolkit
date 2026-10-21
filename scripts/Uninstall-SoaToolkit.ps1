@@ -28,7 +28,8 @@
       RemovePolicy          deletes CN=Cloud if the toolkit created it (= AD object enforcement off)
       RemoveTasks           collects journals / status / logs to <ReportPath>\Uninstall\<host>, then removes tasks,
                             task folder, scripts, data folder and the event log 'SoaToolkit' on every host
-      RemoveAudit           removes the toolkit SACL entries and the audit GPO (if created)
+      RemoveAudit           removes the toolkit SACL entries (exact fingerprint, only where the manifest records them)
+                            and the audit GPO (if created)
       RemoveDelegation      removes every ACE of the toolkit gMSA (and break-glass) and the Event Log Readers membership
       RemoveBatchLogonGpo   deletes the batch logon GPO(s); verifies the right on the hosts (-Refresh), cleans a
                             remaining local entry on member servers
@@ -58,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.
@@ -117,6 +118,10 @@ function Test-Owned($Entry, [string]$MarkerText) {
     if ($Entry -and $Entry.Action -eq 'PreExisting') { return $false }
     return (Test-SoaMarker $MarkerText)
 }
+
+$runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+Write-UninstallLog ("RUN {0} START tool=Uninstall version={1} steps={2} preset={3} whatif={4}" -f $runId, (Get-SoaVersion).Version, (($order | Where-Object { $selected -contains $_ }) -join ','), $Preset, [bool]$WhatIfPreference)
+Set-SoaLineLog -Path $log -Prefix "RUN $runId"
 
 Write-SoaSection ("SOA Toolkit {0} - Uninstall - domain {1} - steps: {2}" -f (Get-SoaVersion).Version, $ctx.DnsRoot, (($order | Where-Object { $selected -contains $_ }) -join ', '))
 if (-not $hasManifest) { Write-SoaLine WARN "No manifest at $(Get-SoaManifestPath -Config $cfg) - falling back to the marker '[SoaToolkit]' and the configured names (previous values cannot be restored)." }
@@ -283,7 +288,7 @@ foreach ($current in ($order | Where-Object { $selected -contains $_ })) {
                 foreach ($dn in @($sacl.Data.Dns)) {
                     if (-not $Cmdlet.ShouldProcess($dn, 'Remove SACL entry (Everyone, Success, Write msDS-ObjectSoa)')) { continue }
                     $acl = Get-Acl -Path "$drive\$dn" -Audit
-                    $hit = @($acl.GetAuditRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -eq $S.Everyone -and $_.ObjectType -eq $attr })
+                    $hit = @($acl.GetAuditRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { Test-SoaSaclFingerprint -Rule $_ -AttributeGuid $attr })
                     foreach ($r in $hit) { [void]$acl.RemoveAuditRuleSpecific($r) }
                     if ($hit.Count) { Set-Acl -Path "$drive\$dn" -AclObject $acl; Write-SoaLine DEL "SACL entry removed on $dn" } else { Write-SoaLine SKIP "no toolkit SACL entry on $dn" }
                 }
@@ -508,5 +513,7 @@ foreach ($current in ($order | Where-Object { $selected -contains $_ })) {
     }
     Write-UninstallLog "Step $current finished"
 }
+Set-SoaLineLog
+Write-UninstallLog "RUN $runId END"
 Write-Host ''
 Write-Host "Log: $log" -ForegroundColor Cyan

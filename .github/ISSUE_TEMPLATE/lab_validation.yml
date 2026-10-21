@@ -1,0 +1,36 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+name: Lab validation result
+description: Results of the lab validation checklist L1-L20 (docs/VALIDATION.md).
+labels: [validation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run the checklist, record manual items with `.\Export-SoaReport.ps1 -Record Lx -Result PASS|FAIL -Note '...'`, then `.\Export-SoaReport.ps1`, review the folder and package it with `-Package`.
+  - type: input
+    id: version
+    attributes:
+      label: Toolkit version
+      placeholder: "2.0.2"
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary (table L1-L20 from report.md)
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Observations and deviations
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I reviewed the attachment; it contains no real domain, host, user or company names, and not the pseudonym map.
+          required: true

@@ -25,7 +25,8 @@
         Console + CSV / JSON (+ HTML with -Html) in ReportPath\Monitor.
 
     Domain-wide checks: AD object enforcement policy (mode, allow-list, replication), automatic rolling, PSO values
-    and target, toolkit objects (gMSA, groups, GPOs incl. marker / link / version), PSO group drift, every
+    and target, toolkit objects (gMSA, groups, GPOs incl. marker / link / version), PSO group drift, the toolkit's
+    SACL entry for msDS-ObjectSoa on every write-scope container (-Scope All only), every
     provisioned user (SCRIL, PNE, PSO, write scope, expired-but-not-rolled, lockout, Kerberos failures,
     AzureADKerberos password replication policy), AzureADKerberos object and krbtgt_AzureAD key age,
     provisioned objects that are not marked.
@@ -33,7 +34,7 @@
     Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.0 (2026-10-20)
+    Toolkit: cloudsync-soa-toolkit 2.0.2 (2026-10-21)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -493,6 +494,26 @@ if ($domainChecks) {
     $fu = @($userRows | Where-Object { $_.Status -eq 'FAIL' }).Count; $wu = @($userRows | Where-Object { $_.Status -eq 'WARN' }).Count
     Add-Result 'USR-SUMMARY' 'Users' 'Provisioned users' $(if ($fu) { 'FAIL' } elseif ($wu) { 'WARN' } else { 'PASS' }) ("{0} provisioned, {1} in scope, {2} FAIL, {3} WARN" -f $userRows.Count, $inScopeSet.Count, $fu, $wu)
 
+    # SACL for the SOA-conversion trigger (event 5136 on msDS-ObjectSoa); reading a SACL needs
+    # "Manage auditing and security log", which the toolkit gMSA deliberately does not have
+    if ($Scope -eq 'All') {
+        try {
+            $attrGuid = Get-SoaAttributeGuid -LdapDisplayName 'msDS-ObjectSoa' -Context $ctx
+            $sdrive = Initialize-SoaAdDrive -Server $server
+            foreach ($dn in @($scopeDns)) {
+                $st = Get-SoaSaclState -Dn $dn -AttributeGuid $attrGuid -Drive $sdrive
+                $stat = if ($st.Toolkit) { 'PASS' } else { 'FAIL' }
+                $det = if ($st.Toolkit) { 'toolkit entry present (Everyone, Success, Write msDS-ObjectSoa, descendant users)' }
+                       else { 'toolkit entry MISSING - SOA-converted users are only onboarded by the reconcile (Install-SoaToolkit.ps1 -Step AuditConfig)' + $(if (@($st.Broad).Count) { ' - other rules exist but are not relied upon' } else { '' }) }
+                Add-Result 'AUD-SACL' 'Audit' "SACL $dn" $stat $det
+                if (@($st.Broad).Count) { Add-Result 'AUD-SACL-OTHER' 'Audit' "Other audit rules on $dn" 'INFO' 'also audit msDS-ObjectSoa writes (noise / diagnosis leftovers?)' @($st.Broad) }
+            }
+            if (-not @($scopeDns).Count) { Add-Result 'AUD-SACL' 'Audit' 'SACL' 'WARN' 'write scope unknown - SACL not checked' }
+        } catch { Add-Result 'AUD-SACL' 'Audit' 'SACL' 'INFO' "not readable: $($_.Exception.Message)" }
+    } else {
+        Add-Result 'AUD-SACL' 'Audit' 'SACL (msDS-ObjectSoa)' 'INFO' 'not readable as the toolkit gMSA (needs "Manage auditing and security log") - checked by -Scope All / Install-SoaToolkit.ps1 -Step Verify'
+    }
+
     # PSO group drift (extra members)
     $extra = @($psoMembers.Keys | Where-Object { -not $inScopeSet.ContainsKey($_) })
     Add-Result 'GRP-DRIFT' 'Toolkit objects' "Members of $($cfg.PsoGroupName) not in scope" $(if ($extra.Count) { 'WARN' } else { 'PASS' }) $(if ($extra.Count) { "$($extra.Count) - removed by the next reconcile run" } else { 'none' }) @($extra | Select-Object -First 50)
@@ -503,7 +524,7 @@ if ($domainChecks) {
 if ($Scope -eq 'All') {
     $statePath = Join-Path (Join-Path $cfg.ReportPath 'Tests') 'test-state.json'
     if (Test-Path -LiteralPath $statePath) {
-        $state = @(Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json)
+        $state = @(Read-SoaJsonArray -Path $statePath)
         $pm = Get-SoaPolicyMode -Context $ctx -Server $server
         foreach ($grp in ($state | Group-Object Test)) {
             $last = $grp.Group | Sort-Object Time -Descending | Select-Object -First 1

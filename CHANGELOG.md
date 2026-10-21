@@ -1,5 +1,68 @@
 # Changelog
 
+## 2.0.2 – 2026-10-21
+
+Maintainability, transparency and verifiability. No change to the target state, the delegated rights or the setup steps.
+
+### New
+
+- **`Export-SoaReport.ps1`**: collects the lab validation status (L1-L20) or the data for a bug report into a local folder with `report.md`, `report.json`, `README-FIRST.md` and anonymized artifacts.
+  - **Content:** AD facts, all toolkit reports and run logs, and per toolkit host the OS build / latest updates, agent version, tasks, event counts, journals and script hashes.
+  - **Anonymization:** domain, hosts, users, accounts, gMSAs, DN values, SIDs, GUIDs, e-mail and IP addresses are replaced by stable pseudonyms; extra terms via `-AdditionalTerms` / `-TermsFile`. The pseudonym map is stored **outside** the folder.
+  - **Leak check** after collection and again before packaging.
+  - **Packaging** only as a separate, confirmed step (`-Package`).
+  - **Manual results** via `-Record`; the list of checks via `-ListChecks`.
+- Install and uninstall write a **run log** (run ID, steps, WhatIf, every ADD / SAME / DEL / FAIL line). It is used to evaluate idempotency (L3), dry runs (L2), mode switches (L17) and rollback (L19).
+- **`tools/`**:
+  - `Test-SoaSecurityClaims.ps1`: static check of the security claims plus an inventory of all write operations.
+  - `Test-SoaRepoHygiene.ps1`: hidden / bidi characters, encodings, license headers, e-mail addresses, local forbidden terms, version consistency.
+  - `Build-SoaRelease.ps1`: zip from the signed tag with `SHA256SUMS.txt`.
+  - `Invoke-SoaStaticChecks.ps1`: all of the above plus parser, PSScriptAnalyzer and tests.
+- **`tests/`**: unit tests and an end-to-end test of `Export-SoaReport.ps1` against a mocked `ActiveDirectory` module.
+- **CI** (`.github/workflows/ci.yml`): PowerShell 7 on Linux and Windows PowerShell 5.1.
+- Issue forms (*Bug report*, *Lab validation result*). Release notes are now in `.github/release-notes/`.
+- PDF source in the repository: `docs/src/build_findings_pdf.py` (version and date read from the module).
+- Documentation:
+  - [AGENTS.md](AGENTS.md): rules for contributors and coding agents.
+  - [docs/DECISIONS.md](docs/DECISIONS.md): design decisions D-01 to D-20.
+  - [docs/EVIDENCE.md](docs/EVIDENCE.md): lab evidence behind *Observed*.
+  - [docs/VALIDATION.md](docs/VALIDATION.md): checklist L1-L20.
+  - [docs/REPORTING.md](docs/REPORTING.md): reports and bug reports.
+  - [docs/RELEASING.md](docs/RELEASING.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md): release process and recurring maintenance.
+  - [SECURITY.md](SECURITY.md): security properties S1-S7, how to verify them, a prompt for reviewing with your own AI.
+- README:
+  - **verification status**, with the open lab validation items L1-L20;
+  - a section **How this project was built** (AI assistance, human review, manual lab measurements);
+  - a summary of the security properties.
+
+### Fixed
+
+- Windows PowerShell 5.1 does not enumerate arrays returned by `ConvertFrom-Json`. Reading the test results (`test-state.json`) in `Test-SoaBehavior.ps1` and `Watch-CloudUserConformance.ps1` could therefore produce a nested array, so earlier results were lost or not shown. Both now use the new module function `Read-SoaJsonArray`.
+
+### Changed
+
+- The README no longer says the toolkit "never sets" a password without the exception: the acceptance test `RandomReset` sets a random, never-stored secret on the configured TestUser (claim S2).
+
+## 2.0.1 – 2026-10-20
+
+### Changed
+
+- **AuditConfig always sets the toolkit's own SACL entry** for writes to `msDS-ObjectSoa` (Everyone, Success, WriteProperty on that attribute, descendant user objects) on every write-scope container. Before, a broader existing rule (for example a diagnostic "Write all properties" SACL) counted as sufficient; if that rule was removed later, event 5136 - the trigger for SOA-converted users - disappeared silently. Broader rules are now reported as INFO and never relied upon.
+- **Uninstall `RemoveAudit`** removes only SACL entries with the toolkit's exact fingerprint (before: every Everyone rule on `msDS-ObjectSoa`).
+- `Get-SoaAttributeGuid` reads from the DC the context is bound to (no PDC emulator dependency).
+
+### New
+
+- Monitor checks **`AUD-SACL`** (toolkit SACL entry present on every write-scope container, FAIL if missing) and **`AUD-SACL-OTHER`** (other rules that also audit these writes, INFO). Reading SACLs needs "Manage auditing and security log", so the checks run in `Watch-CloudUserConformance.ps1 -Scope All` and `Install-SoaToolkit.ps1 -Step Verify`; the gMSA monitor reports INFO.
+- Module functions `Test-SoaSaclFingerprint`, `New-SoaSaclRule`, `Get-SoaSaclState` (shared by install, monitor and uninstall).
+- Documentation: how the toolkit identifies changes that cannot carry a marker (ACEs, SACL entries, domain setting, user attributes) - `docs/SETUP.md` section 9.1.
+
+### Upgrade from 2.0.0
+
+1. Copy the new scripts, then run `Install-SoaToolkit.ps1 -Step AuditConfig` (adds the toolkit SACL entry where only a broader rule existed) and `-Step DeployTasks` (updates the scripts on the hosts).
+2. Remove diagnostic SACLs that are no longer needed (`AUD-SACL-OTHER` lists them).
+3. `Install-SoaToolkit.ps1 -Step Verify` → `AUD-SACL` must be PASS for every write-scope container.
+
 ## 2.0.0 – 2026-10-20
 
 Repository renamed from `cloudsync-ad-enforcement-toolkit` to **`cloudsync-soa-toolkit`**. License: **MPL-2.0**.

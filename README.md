@@ -4,7 +4,7 @@
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.1 (2026-10-20).** Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.0.2 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -21,11 +21,23 @@
 - [Key findings](#key-findings)
 - [SCRIL, password expiry and automatic rolling](#scril-password-expiry-and-automatic-rolling)
 - [Upstream issues in Microsoft's scripts and documentation](#upstream-issues-in-microsofts-scripts-and-documentation)
-- [Open questions and verification status](#open-questions-and-verification-status)
+- [Project status, verification and how it was built](#project-status-verification-and-how-it-was-built)
+- [Security properties](#security-properties)
 - [References](#references)
 - [Authors, contributing, license](#authors-contributing-license)
 
-Further documentation: [docs/SETUP.md](docs/SETUP.md) (what Microsoft documents vs. what the toolkit does, step-by-step setup), [docs/OPERATIONS.md](docs/OPERATIONS.md) (the three primary tasks, topology, monitoring, rollback and decommissioning), [CHANGELOG.md](CHANGELOG.md), [docs/Consolidated-Findings.pdf](docs/Consolidated-Findings.pdf).
+Further documentation:
+
+| Document | Content |
+|---|---|
+| [docs/SETUP.md](docs/SETUP.md) | what Microsoft documents vs. what the toolkit does, step-by-step setup |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | the three primary tasks, topology, monitoring, rollback and decommissioning |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | lab validation checklist L1-L20 and its status |
+| [docs/REPORTING.md](docs/REPORTING.md) | anonymized validation reports and bug reports (`Export-SoaReport.ps1`) |
+| [SECURITY.md](SECURITY.md) | security properties S1-S7, how to verify them, how to report vulnerabilities |
+| [docs/DECISIONS.md](docs/DECISIONS.md), [docs/EVIDENCE.md](docs/EVIDENCE.md) | design decisions; lab evidence behind *Observed* findings |
+| [docs/MAINTENANCE.md](docs/MAINTENANCE.md), [docs/RELEASING.md](docs/RELEASING.md), [AGENTS.md](AGENTS.md) | maintenance routines, release process, rules for contributors and coding agents |
+| [CHANGELOG.md](CHANGELOG.md), [docs/Consolidated-Findings.pdf](docs/Consolidated-Findings.pdf) | changes per version; findings as PDF |
 
 ---
 
@@ -64,12 +76,13 @@ Further documentation: [docs/SETUP.md](docs/SETUP.md) (what Microsoft documents 
 | **Prove the behaviour** | SCRIL matrix, automatic rolling with a real passwordless sign-in, onboarding, enforcement, logon. Writes only to the test user. | `Test-SoaBehavior.ps1` |
 | **Toggle diagnostics** | GPO for NTDS diagnostics `2 Security Events` (events 3095/3097/3098). Can also be used on its own. | `Set-SoaDiagnosticsGpo.ps1` |
 | **Roll back** | Step by step or by preset (`Decommission` / `Full`), driven by the install manifest. Never removes objects that existed before. | `Uninstall-SoaToolkit.ps1` |
+| **Report results / bugs** | Collects lab validation results (L1-L20) or bug-report data into a local folder, replaces identifiers by pseudonyms, runs a leak check and packages only after your review. Read-only. | `Export-SoaReport.ps1` |
 
 Every object the toolkit creates carries the marker **`[SoaToolkit] Managed by SOA Toolkit - do not modify manually`** and a link to this repository. The marker is placed in the `description` / `info` attribute, the GPO comment, the WMI filter description, the task description and the file header. Changes to toolkit objects are detected by the monitoring.
 
 ## What it deliberately does not do
 
-- **No password rotation.** The domain controllers roll the secret themselves (automatic rolling). The toolkit never knows, sets or stores a user password.
+- **No password rotation.** The domain controllers roll the secret themselves (automatic rolling). The toolkit never knows, sets or stores a user password. The only exception: one acceptance test sets a random secret on the configured TestUser and never stores or outputs it ([SECURITY.md](SECURITY.md#security-properties-claims), S2).
 - **No change outside the scope.** Only users with the anchor `User_*` **and** `msDS-ObjectSoa = Cloud` are changed, and only the bits SCRIL / "password never expires". SCRIL is never removed automatically.
 - **No non-LDAP or DC-internal write paths.** They are not used and not tested.
 - **No Cloud Sync configuration.** Agents, scoping and attribute mappings stay with Microsoft's tooling.
@@ -148,8 +161,11 @@ All scripts are in `scripts/` and share `SoaToolkit.psm1` (functions) and `SoaTo
 | `Test-SoaBehavior.ps1` | Acceptance tests (suites) | TestUser only |
 | `Get-SoaEnforcementImpact.ps1` | Impact of Enforced mode | – |
 | `Set-SoaDiagnosticsGpo.ps1` | Diagnostics GPO (can also be used on its own) | GPO |
+| `Export-SoaReport.ps1` | Validation / bug report: collect, anonymize, review, package | report folder only |
 | `SoaToolkit.psm1` | Shared functions | – |
 | `SoaToolkit.config.psd1` | Configuration (placeholders: `contoso.com`) | – |
+
+Outside `scripts/`: `tools/` (static checks, security claims, hygiene, release build), `tests/` (tests without a domain, incl. an end-to-end test against a mocked AD module), `docs/src/` (source of the PDF), `.github/` (CI, issue templates, release notes).
 
 Naming scheme: `Soa*` = toolkit, infrastructure and Microsoft's feature. `CloudUser*` = the target state of the users. Verbs: `Test` = check / test, `Get` = report, `Set` = single setting, `Install` / `Uninstall` = setup / rollback, `Invoke` = changes users, `Watch` = monitoring.
 
@@ -252,17 +268,57 @@ Versions examined (retrieved **2026-10-19**):
 
 These findings have not been reported upstream yet. If you can reproduce them, consider opening an issue in the Microsoft repository or using the documentation feedback.
 
-## Open questions and verification status
+## Project status, verification and how it was built
 
-| Question | Status / how it is answered |
+### Verification status
+
+| Level | Status |
 |---|---|
-| Does a passwordless sign-in via Cloud Kerberos Trust trigger rolling? (K10) | **Answered: yes** (`Test-SoaBehavior.ps1 -Suite RollingObserve`) |
-| Does setting SCRIL update `pwdLastSet` / re-randomize? (K11) | **Answered** (`-Suite Scril`) |
-| Does rolling also update `pwdLastSet` (as MS-SAMS says)? | `-Suite RollingObserve` records it (V1); the monitoring flags "rolled but still expired" |
-| Does AD accept the compare-and-swap form of the `userAccountControl` update? | Used by `Set-SoaUacFlags`; falls back to replace automatically; the journal records the method used |
-| May the toolkit gMSA write to the `SoaToolkit` event log in every environment? | The channel access is set by DeployTasks; check for heartbeat event 2000 after deployment |
-| Is the allow-list evaluated for group SIDs in the token? | Not tested; only account SIDs are used |
-| DC-internal writes and non-LDAP password paths under enforcement | Out of scope |
+| Findings about Microsoft's features (K1-K21) | *Documented* findings link their sources. *Observed* findings were measured **manually by the maintainer** in a lab domain ([docs/EVIDENCE.md](docs/EVIDENCE.md); completing the records with dates and builds is in progress) |
+| Static quality of the 2.x scripts | parser, PSScriptAnalyzer (PowerShell 5.1 and 7 syntax), unit tests, an end-to-end test of the report tool against a mocked AD module, and the security-claim checker. They run in CI on every change |
+| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.2 (2026-10-21) |
+
+Open items of the lab validation ([docs/VALIDATION.md](docs/VALIDATION.md)):
+
+| # | Item | # | Item |
+|---|---|---|---|
+| L1 | prerequisites | L11 | `userAccountControl` update method (compare-and-swap or replace) |
+| L2 | installation dry run | L12 | SCRIL matrix with 2.x code |
+| L3 | installation and idempotency | L13 | rolling updates `pwdLastSet` (V1) |
+| L4 | batch logon GPO keeps existing rights | L14 | audit phase impact |
+| L5 | KIR GPO, WMI filter, engine per DC | L15 | Enforced mode (toolkit allowed, others blocked on every DC) |
+| L6 | audit policy and toolkit SACL | L16 | Cloud Sync still writes under Enforced |
+| L7 | tasks and event log as gMSA (heartbeat) | L17 | emergency switch back to Audit |
+| L8 | new cloud-only user (event 4720 path) | L18 | monitoring |
+| L9 | SOA conversion (event 5136 path) | L19 | rollback and reinstall |
+| L10 | reconcile repairs drift | L20 | long-term rolling (after one PSO max age) |
+
+Questions that the validation answers:
+
+| Question | Answered by |
+|---|---|
+| Does a passwordless sign-in via Cloud Kerberos Trust trigger rolling? (K10) | **Answered: yes** (manual lab observation); re-confirmed with the 2.x test suite in L13 |
+| Does setting SCRIL update `pwdLastSet` / re-randomize? (K11) | **Answered** (manual lab observation); re-confirmed in L12 |
+| Does rolling also update `pwdLastSet` (as MS-SAMS says)? (V1) | L13 |
+| Does AD accept the compare-and-swap form of the `userAccountControl` update? | L11 (the toolkit falls back to replace automatically; the journal records the method) |
+| May the toolkit gMSA write to the `SoaToolkit` event log in every environment? | L7 |
+
+Deliberately left open:
+- whether the allow-list is evaluated for group SIDs in the token. This is not used: the toolkit allow-lists account SIDs only.
+- DC-internal writes and non-LDAP password paths, which are out of scope.
+
+### How this project was built
+
+The code and documentation were written with **extensive AI assistance** (Anthropic Claude, Opus-class models, in October 2026). The maintainer:
+- specified the design and made the decisions ([docs/DECISIONS.md](docs/DECISIONS.md));
+- **measured the *Observed* findings manually** in the lab;
+- reviewed the artifacts, and is accountable for the project.
+
+The end-to-end validation of the 2.x scripts in the lab is not finished yet (see above). Until it is, treat the scripts as **untested in a real domain** and validate them in your own lab first. Contributions with AI assistance are welcome under the rules in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security properties
+
+The toolkit never reads password hashes or secrets. It sets no user passwords in production; the only exception is a test on the configured TestUser. It downloads nothing and executes no dynamic code. It writes only the documented objects and bits, with a least-privilege gMSA. Every change can be rolled back. The details, with where each claim is implemented and how to verify it, including a prompt for reviewing the repository with your own AI, are in [SECURITY.md](SECURITY.md). `tools/Test-SoaSecurityClaims.ps1` checks the claims statically in CI.
 
 ## References
 

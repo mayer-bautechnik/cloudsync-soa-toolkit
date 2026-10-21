@@ -1,0 +1,46 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+#
+# Checks that need no domain: parser, PSScriptAnalyzer, unit + end-to-end tests (mocked AD), security claims,
+# repository hygiene. Runs on PowerShell 7 (Linux) and Windows PowerShell 5.1 (Windows).
+# Maintainer task: pin the actions to full commit SHAs (see docs/RELEASING.md) - Dependabot can keep them current.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pwsh7:
+    name: PowerShell 7 - all static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser -Force
+      - name: Static checks
+        shell: pwsh
+        run: ./tools/Invoke-SoaStaticChecks.ps1 -RequireAnalyzer
+
+  winps51:
+    name: Windows PowerShell 5.1 - tests and claims
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit and end-to-end tests
+        shell: powershell
+        run: .\tests\Invoke-SoaUnitTests.ps1; exit $LASTEXITCODE
+      - name: Security claims
+        shell: powershell
+        run: .\tools\Test-SoaSecurityClaims.ps1; exit $LASTEXITCODE

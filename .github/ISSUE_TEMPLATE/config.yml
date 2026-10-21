@@ -1,0 +1,12 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability (private)
+    url: https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/security/advisories/new
+    about: Report security-relevant findings privately.
+  - name: Microsoft product issue
+    url: https://msrc.microsoft.com/
+    about: Vulnerabilities in Entra Cloud Sync, AD object enforcement or Windows.

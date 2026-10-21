@@ -16,13 +16,14 @@
       - AD helpers (SIDs, ACEs, gMSAs, secret metadata, cloud user identification, write scope)
       - Group Policy helpers (GPT version, client-side extensions, security templates, WMI filters, ADMX parsing)
       - the installation manifest (what was created, which values existed before) for Uninstall-SoaToolkit.ps1
+      - anonymization helpers for Export-SoaReport.ps1 (pseudonyms, leak check)
 
     The module never writes to AD on import. Functions that write are named Set-/Add-/New-/Remove-*.
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.0'
-$script:SoaReleaseDate = '2026-10-20'
+$script:SoaVersion     = '2.0.2'
+$script:SoaReleaseDate = '2026-10-21'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
 
@@ -315,11 +316,21 @@ function Write-SoaSection([string]$Text) {
     Write-Host ('=' * 100) -ForegroundColor DarkCyan
 }
 
+# Optional copy of every Write-SoaLine to a run log (Install / Uninstall); evaluated by Export-SoaReport.ps1
+$script:SoaLineLog = $null
+function Set-SoaLineLog {
+    param([string]$Path, [string]$Prefix)
+    $script:SoaLineLog = if ($Path) { [pscustomobject]@{ Path = $Path; Prefix = $Prefix } } else { $null }
+}
+
 function Write-SoaLine {
     param([ValidateSet('PASS', 'INFO', 'WARN', 'FAIL', 'ADD', 'SAME', 'DEL', 'SKIP')][string]$Status, [string]$Text)
     $map = @{ PASS = 'Green'; INFO = 'Gray'; WARN = 'Yellow'; FAIL = 'Red'; ADD = 'Green'; SAME = 'DarkGray'; DEL = 'Magenta'; SKIP = 'DarkGray' }
     $sym = @{ PASS = '[PASS]'; INFO = '[INFO]'; WARN = '[WARN]'; FAIL = '[FAIL]'; ADD = '  +'; SAME = '  ='; DEL = '  -'; SKIP = '  ~' }
     Write-Host ('{0} {1}' -f $sym[$Status], $Text) -ForegroundColor $map[$Status]
+    if ($script:SoaLineLog) {
+        try { Add-Content -Path $script:SoaLineLog.Path -Value ('{0:s} {1} [{2}] {3}' -f (Get-Date), $script:SoaLineLog.Prefix, $Status, $Text) -Encoding UTF8 } catch { Write-Verbose "Run log write failed: $($_.Exception.Message)" }
+    }
 }
 
 function Get-SoaWorstStatus([string[]]$Statuses) {
@@ -414,6 +425,17 @@ function Write-SoaLog {
     } catch { }
 }
 
+<#
+    Reads a JSON file that holds an array and returns its elements one by one. Windows PowerShell 5.1 does not
+    enumerate arrays returned by ConvertFrom-Json, so @(Get-Content | ConvertFrom-Json) can yield a nested array.
+#>
+function Read-SoaJsonArray {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $x = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($i in @($x)) { if ($null -ne $i) { $i } }
+}
+
 function Save-SoaStatus {
     param([Parameter(Mandatory)][string]$DataPath, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)] $Status)
     $dir = Join-Path $DataPath 'Status'
@@ -472,7 +494,8 @@ function Initialize-SoaAdDrive {
 
 function Get-SoaAttributeGuid {
     param([Parameter(Mandatory)][string]$LdapDisplayName, [Parameter(Mandatory)] $Context)
-    $o = Get-ADObject -Server $Context.Pdc -SearchBase $Context.SchemaNC -LDAPFilter "(lDAPDisplayName=$LdapDisplayName)" -Properties schemaIDGUID
+    $srv = if ($Context.PSObject.Properties.Name -contains 'Server' -and $Context.Server) { $Context.Server } else { $Context.Pdc }
+    $o = Get-ADObject -Server $srv -SearchBase $Context.SchemaNC -LDAPFilter "(lDAPDisplayName=$LdapDisplayName)" -Properties schemaIDGUID
     if (-not $o) { throw "Attribute $LdapDisplayName not found in the schema." }
     [guid]$o.schemaIDGUID
 }
@@ -527,6 +550,56 @@ function Remove-SoaTrusteeAces {
         Set-Acl -Path $path -AclObject $acl
     }
     $mine.Count
+}
+
+<#
+    SACL entry of the toolkit (trigger for SOA-converted users: event 5136 on writes to msDS-ObjectSoa).
+    ACEs and SACL entries cannot carry a description, so the toolkit's entry is identified by its exact fingerprint:
+      trustee Everyone (S-1-1-0), audit Success only, right WriteProperty only, object type = msDS-ObjectSoa,
+      inheritance Descendents, inherited object type = user, explicit (not inherited)
+    and by the manifest (kind 'Sacl'). Broader audit rules (e.g. "Write all properties" from a diagnosis) also
+    produce 5136, but the toolkit never relies on them: they may be removed at any time by their owner.
+#>
+function Test-SoaSaclFingerprint {
+    param([Parameter(Mandatory)] $Rule, [Parameter(Mandatory)][guid]$AttributeGuid)
+    ($Rule.IdentityReference.Value -eq $script:SoaSid.Everyone) -and
+    ("$($Rule.AuditFlags)" -eq 'Success') -and
+    ($Rule.ActiveDirectoryRights -eq [DirectoryServices.ActiveDirectoryRights]::WriteProperty) -and
+    ($Rule.ObjectType -eq $AttributeGuid) -and
+    ("$($Rule.InheritanceType)" -eq 'Descendents') -and
+    ($Rule.InheritedObjectType -eq $script:SoaGuid.UserClass)
+}
+
+function New-SoaSaclRule {
+    param([Parameter(Mandatory)][guid]$AttributeGuid)
+    New-Object DirectoryServices.ActiveDirectoryAuditRule(([Security.Principal.SecurityIdentifier]$script:SoaSid.Everyone),
+        'WriteProperty', 'Success', $AttributeGuid, 'Descendents', $script:SoaGuid.UserClass)
+}
+
+<#
+    Reads the SACL of a container (needs "Manage auditing and security log" on the DC - Domain Admins have it,
+    the toolkit gMSA does not). Returns whether the toolkit entry is present and which other rules would also audit
+    writes to msDS-ObjectSoa on users (informational only).
+#>
+function Get-SoaSaclState {
+    param([Parameter(Mandatory)][string]$Dn, [Parameter(Mandatory)][guid]$AttributeGuid, [string]$Drive = 'SOAAD:')
+    $acl = Get-Acl -Path "$Drive\$Dn" -Audit
+    $all = @($acl.GetAuditRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    $toolkit   = @($all | Where-Object { -not $_.IsInherited -and (Test-SoaSaclFingerprint -Rule $_ -AttributeGuid $AttributeGuid) })
+    $inherited = @($all | Where-Object { $_.IsInherited -and (Test-SoaSaclFingerprint -Rule $_ -AttributeGuid $AttributeGuid) })
+    $broad = @($all | Where-Object {
+        -not (Test-SoaSaclFingerprint -Rule $_ -AttributeGuid $AttributeGuid) -and
+        (($_.AuditFlags -band [Security.AccessControl.AuditFlags]::Success) -ne 0) -and
+        (($_.ActiveDirectoryRights -band ([DirectoryServices.ActiveDirectoryRights]'WriteProperty, GenericWrite, GenericAll')) -ne 0) -and
+        ($_.ObjectType -eq [guid]::Empty -or $_.ObjectType -eq $AttributeGuid) -and
+        ("$($_.InheritanceType)" -in 'All', 'Descendents') -and
+        ($_.InheritedObjectType -eq [guid]::Empty -or $_.InheritedObjectType -eq $script:SoaGuid.UserClass)
+    } | ForEach-Object {
+        $who = try { $_.IdentityReference.Translate([Security.Principal.NTAccount]).Value } catch { $_.IdentityReference.Value }
+        '{0}: {1} ({2}), object type {3}, {4}{5}' -f $who, $_.ActiveDirectoryRights, $_.AuditFlags,
+            $(if ($_.ObjectType -eq [guid]::Empty) { 'all properties' } else { 'msDS-ObjectSoa' }), $_.InheritanceType, $(if ($_.IsInherited) { ', inherited' } else { '' })
+    })
+    [pscustomobject]@{ Dn = $Dn; Toolkit = ($toolkit.Count -gt 0); ToolkitInherited = ($inherited.Count -gt 0); Broad = $broad; Acl = $acl }
 }
 
 function Get-SoaJobGmsa {
@@ -1123,6 +1196,203 @@ function Remove-SoaManifestEntry {
     Runs a script block on a host: locally if the host is this computer, otherwise via WinRM.
     Returns @{ Host; Ok; Result; Error }.
 #>
+#region --- Anonymization (Export-SoaReport.ps1) ------------------------------------------------------
+<#
+    Replaces environment-specific identifiers with stable pseudonyms before data leaves the environment.
+    Two layers:
+      1. known terms registered from AD and the configuration (domain, NetBIOS name, DCs, hosts, users, groups,
+         gMSAs, extra terms of the operator) - longest first, case-insensitive, whole tokens only
+      2. patterns: CN= / OU= values of distinguished names, DOMAIN\account, domain SIDs, GUIDs, e-mail addresses,
+         IPv4 addresses, user profile paths
+    The map (original -> pseudonym) never leaves the environment; Export-SoaReport.ps1 stores it separately.
+#>
+$script:SoaKeepCn = @(
+    'Users', 'Computers', 'System', 'Builtin', 'Domain Controllers', 'Configuration', 'Schema', 'Policies', 'Machine', 'User',
+    'Password Settings Container', 'SOA-Policies', 'Cloud', 'ForeignSecurityPrincipals', 'Managed Service Accounts',
+    'WMIPolicy', 'SOM', 'Program Data', 'Microsoft', 'Sites', 'Services', 'Partitions', 'NTDS Settings', 'Servers',
+    'Directory Service', 'Windows NT', 'Default Domain Policy', 'Default Domain Controllers Policy', 'Administrator',
+    'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators', 'Event Log Readers', 'krbtgt',
+    'AzureADKerberos', 'Read-only Domain Controllers', 'Allowed RODC Password Replication Group',
+    'Denied RODC Password Replication Group', 'Domain Users', 'Domain Computers', 'Protected Users', 'Key Admins',
+    'Enterprise Key Admins', 'Group Policy Creator Owners'
+)
+
+function New-SoaAnonymizer {
+    param([string[]]$KeepNames = @())
+    $keepGuids = @{}
+    foreach ($g in $script:SoaGuid.Values) { $keepGuids["$g".ToLower()] = $true }
+    foreach ($a in $script:SoaAuditSubcategories) { $keepGuids[$a.Guid.Trim('{}').ToLower()] = $true }
+    foreach ($c in $script:SoaCse.Values) { foreach ($m in [regex]::Matches($c, '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}')) { $keepGuids[$m.Value.ToLower()] = $true } }
+    $keep = @{}
+    foreach ($n in @($script:SoaKeepCn) + @($KeepNames)) { if ($n) { $keep[$n.ToLower()] = $true } }
+    [pscustomobject]@{
+        Terms     = (New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase))
+        Map       = (New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase))
+        Counters  = @{}
+        KeepNames = $keep
+        KeepGuids = $keepGuids
+        DomainSids = @{}
+        Compiled  = $null
+    }
+}
+
+function Get-SoaPseudonym {
+    param([Parameter(Mandatory)] $Anonymizer, [Parameter(Mandatory)][string]$Kind, [Parameter(Mandatory)][string]$Original)
+    if ($Anonymizer.Map.ContainsKey("$Kind|$Original")) { return $Anonymizer.Map["$Kind|$Original"].Pseudonym }
+    $n = 1 + [int]$Anonymizer.Counters[$Kind]; $Anonymizer.Counters[$Kind] = $n
+    $p = switch ($Kind) {
+        'DOMAIN'  { if ($n -eq 1) { 'corp.example' } else { 'domain{0}.example' -f $n } }
+        'NETBIOS' { if ($n -eq 1) { 'CORP' } else { 'DOMAIN{0}' -f $n } }
+        'DC'      { 'dc{0:00}' -f $n }
+        'HOST'    { 'host{0:00}' -f $n }
+        'USER'    { 'user{0:000}' -f $n }
+        'GROUP'   { 'group{0:000}' -f $n }
+        'GMSA'    { 'gmsa{0:00}' -f $n }
+        'ACCOUNT' { 'account{0:000}' -f $n }
+        'OU'      { 'OU-{0:000}' -f $n }
+        'CN'      { 'object{0:000}' -f $n }
+        'GUID'    { '00000000-0000-4000-8000-{0:000000000000}' -f $n }
+        'SID'     { 'S-1-5-21-{0}000000000-0-0' -f $n }
+        'MAIL'    { 'mail{0:000}@example.invalid' -f $n }
+        'IP'      { '192.0.2.{0}' -f ($n % 254 + 1) }
+        'PROFILE' { 'profile{0:00}' -f $n }
+        default   { 'term{0:000}' -f $n }
+    }
+    $Anonymizer.Map["$Kind|$Original"] = [pscustomobject]@{ Kind = $Kind; Original = $Original; Pseudonym = $p }
+    $p
+}
+
+<#
+    Registers a known identifier. Kinds: DOMAIN (DNS name), DOMAINDN, NETBIOS, DC, HOST, USER, GROUP, GMSA, ACCOUNT, TERM.
+    Hosts are registered with FQDN and short name; a DOMAIN also registers its DN form.
+#>
+function Add-SoaAnonymizerTerm {
+    param([Parameter(Mandatory)] $Anonymizer, [Parameter(Mandatory)][ValidateSet('DOMAIN', 'NETBIOS', 'DC', 'HOST', 'USER', 'GROUP', 'GMSA', 'ACCOUNT', 'TERM')][string]$Kind,
+          [AllowEmptyString()][string]$Value, [string]$DomainDns)
+    if (-not $Value -or $Value.Trim().Length -lt 2) { return }
+    $v = $Value.Trim()
+    if ($Anonymizer.KeepNames.ContainsKey($v.ToLower())) { return }
+    switch ($Kind) {
+        'DOMAIN' {
+            $p = Get-SoaPseudonym -Anonymizer $Anonymizer -Kind 'DOMAIN' -Original $v
+            $Anonymizer.Terms[$v] = $p
+            $dn  = ($v.Split('.') | ForEach-Object { "DC=$_" }) -join ','
+            $pdn = ($p.Split('.') | ForEach-Object { "DC=$_" }) -join ','
+            $Anonymizer.Terms[$dn] = $pdn
+            $Anonymizer.Map["DOMAINDN|$dn"] = [pscustomobject]@{ Kind = 'DOMAINDN'; Original = $dn; Pseudonym = $pdn }
+        }
+        { $_ -in 'DC', 'HOST' } {
+            $short = ($v -split '\.')[0]
+            $p = Get-SoaPseudonym -Anonymizer $Anonymizer -Kind $Kind -Original $short.ToLower()
+            $Anonymizer.Terms[$short] = $p
+            if ($v.Contains('.')) {
+                $dom = $v.Substring($short.Length + 1)
+                $pd = if ($Anonymizer.Terms.ContainsKey($dom)) { $Anonymizer.Terms[$dom] } else { Get-SoaPseudonym -Anonymizer $Anonymizer -Kind 'DOMAIN' -Original $dom }
+                $Anonymizer.Terms[$v] = "$p.$pd"
+            }
+        }
+        'GMSA' {
+            $base = $v.TrimEnd('$')
+            $p = Get-SoaPseudonym -Anonymizer $Anonymizer -Kind 'GMSA' -Original $base.ToLower()
+            $Anonymizer.Terms["$base`$"] = "$p`$"
+            $Anonymizer.Terms[$base] = $p
+        }
+        default {
+            $Anonymizer.Terms[$v] = Get-SoaPseudonym -Anonymizer $Anonymizer -Kind $Kind -Original $v
+        }
+    }
+    $Anonymizer.Compiled = $null
+}
+
+function ConvertTo-SoaAnonymizedText {
+    param([Parameter(Mandatory)] $Anonymizer, [AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not $Text) { return $Text }
+    $a = $Anonymizer
+    $opt = [Text.RegularExpressions.RegexOptions]::IgnoreCase
+
+    # 1. known terms, longest first, as whole tokens
+    if (-not $a.Compiled -and $a.Terms.Count) {
+        $keys = @($a.Terms.Keys | Sort-Object { $_.Length } -Descending | ForEach-Object { [regex]::Escape($_) })
+        $a.Compiled = New-Object Text.RegularExpressions.Regex ('(?<![\w])(' + ($keys -join '|') + ')(?![\w])'), $opt
+    }
+    if ($a.Compiled) { $Text = $a.Compiled.Replace($Text, { param($m) $a.Terms[$m.Value] }) }
+
+    # 2. DOMAIN\account - the NetBIOS name is already a pseudonym after step 1 (CORP / DOMAINn)
+    #    (one or two backslashes: plain text and JSON)
+    $Text = [regex]::Replace($Text, '(?<![\w\\])(CORP|DOMAIN\d+)(\\{1,2})([A-Za-z0-9._$-]{2,64})', {
+        param($m)
+        $pd = $m.Groups[1].Value; $sep = $m.Groups[2].Value; $acc = $m.Groups[3].Value
+        if ($acc -match '^(user|account|gmsa|host|dc)\d' -or $a.KeepNames.ContainsKey($acc.TrimEnd('$').ToLower()) -or $a.KeepNames.ContainsKey($acc.ToLower())) { return $m.Value }
+        $pa = if ($acc.EndsWith('$')) { (Get-SoaPseudonym -Anonymizer $a -Kind 'GMSA' -Original $acc.TrimEnd('$').ToLower()) + '$' } else { Get-SoaPseudonym -Anonymizer $a -Kind 'ACCOUNT' -Original $acc.ToLower() }
+        "$pd$sep$pa"
+    })
+
+    # 3. CN= / OU= values of distinguished names
+    $Text = [regex]::Replace($Text, '(?<![\w])(CN|OU)=((?:\\,|[^,=;"\r\n<>])+?)(?=,|;|"|\r|\n|<|>|$)', {
+        param($m)
+        $type = $m.Groups[1].Value; $val = $m.Groups[2].Value
+        if ($a.KeepNames.ContainsKey($val.ToLower()) -or $val -match '^\{[0-9A-Fa-f-]{36}\}$' -or $val -match '^(user|object|group|gmsa|term|account|profile)\d{2,3}\$?$|^OU-\d{3}$|^(dc|host)\d{2}$') { return $m.Value }
+        if ($val -match '^(ms-|ms[A-Z])' -or $val -match '^SOA-') { return $m.Value }
+        $kind = if ($type -ieq 'OU') { 'OU' } else { 'CN' }
+        "$type=$(Get-SoaPseudonym -Anonymizer $a -Kind $kind -Original $val)"
+    }, $opt)
+
+    # 4. domain SIDs (keep the RID), GUIDs, e-mail addresses, IPv4, user profile paths
+    $Text = [regex]::Replace($Text, 'S-1-5-21-(\d{1,10})-(\d{1,10})-(\d{1,10})', {
+        param($m) if ($m.Value -match '^S-1-5-21-\d000000000-0-0$') { return $m.Value }; Get-SoaPseudonym -Anonymizer $a -Kind 'SID' -Original $m.Value })
+    $Text = [regex]::Replace($Text, '(?<![0-9A-Fa-f-])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f-])', {
+        param($m)
+        $g = $m.Value.ToLower()
+        if ($a.KeepGuids.ContainsKey($g) -or $g -like '00000000-0000-4000-8000-*' -or $g -eq '00000000-0000-0000-0000-000000000000') { return $m.Value }
+        Get-SoaPseudonym -Anonymizer $a -Kind 'GUID' -Original $g })
+    $Text = [regex]::Replace($Text, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', {
+        param($m) if ($m.Value -match '@(corp|domain\d+)\.example$|@example\.invalid$') { return $m.Value }; Get-SoaPseudonym -Anonymizer $a -Kind 'MAIL' -Original $m.Value.ToLower() })
+    $Text = [regex]::Replace($Text, '(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])', {
+        param($m)
+        $o = @(1..4 | ForEach-Object { [int]$m.Groups[$_].Value })
+        if (@($o | Where-Object { $_ -gt 255 }).Count) { return $m.Value }                  # version numbers etc.
+        if ($m.Value -match '^(127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.255|192\.0\.2\.\d+)$') { return $m.Value }
+        if ($o[0] -le 1) { return $m.Value }                                                 # version numbers such as 1.0.1.0
+        Get-SoaPseudonym -Anonymizer $a -Kind 'IP' -Original $m.Value })
+    $Text = [regex]::Replace($Text, '(?i)([A-Z]:\\{1,2}Users\\{1,2})([^\\/\s"'']+)', {
+        param($m) if ($m.Groups[2].Value -match '^(Public|Default|All Users|profile\d+|(user|account)\d{3})$') { return $m.Value }; $m.Groups[1].Value + (Get-SoaPseudonym -Anonymizer $a -Kind 'PROFILE' -Original $m.Groups[2].Value.ToLower()) })
+    $Text
+}
+
+function Get-SoaAnonymizerMap {
+    param([Parameter(Mandatory)] $Anonymizer)
+    @($Anonymizer.Map.Values | Sort-Object Kind, Pseudonym)
+}
+
+<#
+    Leak check for a text that has been anonymized: every original value of the map must be gone, and no pattern of
+    a real identifier may remain (domain SID, GUID outside the keep list, e-mail address, IPv4 address).
+#>
+function Find-SoaResidualIdentifier {
+    param([Parameter(Mandatory)] $Anonymizer, [AllowEmptyString()][string]$Text, [object[]]$MapEntries)
+    if (-not $Text) { return @() }
+    $hits = New-Object System.Collections.Generic.List[object]
+    $entries = if ($MapEntries) { $MapEntries } else { Get-SoaAnonymizerMap -Anonymizer $Anonymizer }
+    foreach ($e in $entries) {
+        $o = "$($e.Original)"
+        if ($o.Length -lt 3 -or $e.Kind -in 'IP') { continue }
+        if ($o -ieq "$($e.Pseudonym)" -or $o -match '^((user|account|gmsa|host|dc|term|object|group|profile)\d+\$?|OU-\d+)$') { continue }   # original was already a pseudonym
+        if ($e.Kind -in 'OU', 'CN') {
+            # generic words (e.g. 'Groups') are only a leak in a distinguished name
+            if ([regex]::IsMatch($Text, '(?<![\w])(OU|CN)=' + [regex]::Escape($o) + '(?=,|"|$)', 'IgnoreCase')) { $hits.Add([pscustomobject]@{ Type = "known $($e.Kind)"; Value = $o }) }
+            continue
+        }
+        if ([regex]::IsMatch($Text, '(?<![\w])' + [regex]::Escape($o) + '(?![\w])', 'IgnoreCase')) { $hits.Add([pscustomobject]@{ Type = "known $($e.Kind)"; Value = $o }) }
+        elseif ($e.Kind -in 'DOMAIN', 'NETBIOS', 'TERM' -and $o.Length -ge 4 -and $Text.IndexOf($o, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hits.Add([pscustomobject]@{ Type = "embedded $($e.Kind) (check)"; Value = $o }) }
+    }
+    foreach ($m in [regex]::Matches($Text, 'S-1-5-21-\d{1,10}-\d{1,10}-\d{1,10}')) { if ($m.Value -notmatch '^S-1-5-21-\d000000000-0-0$') { $hits.Add([pscustomobject]@{ Type = 'domain SID'; Value = $m.Value }) } }
+    foreach ($m in [regex]::Matches($Text, '(?<![0-9A-Fa-f-])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f-])')) {
+        $g = $m.Value.ToLower(); if (-not ($Anonymizer.KeepGuids.ContainsKey($g) -or $g -like '00000000-0000-4000-8000-*' -or $g -eq '00000000-0000-0000-0000-000000000000')) { $hits.Add([pscustomobject]@{ Type = 'GUID'; Value = $m.Value }) } }
+    foreach ($m in [regex]::Matches($Text, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')) { if ($m.Value -notmatch '@(corp|domain\d+)\.example$|@example\.invalid$') { $hits.Add([pscustomobject]@{ Type = 'e-mail'; Value = $m.Value }) } }
+    @($hits | Sort-Object Type, Value -Unique)
+}
+#endregion
+
 function Invoke-SoaOnHost {
     param([Parameter(Mandatory)][string]$ComputerName, [Parameter(Mandatory)][scriptblock]$ScriptBlock, [object[]]$ArgumentList = @())
     $local = Get-SoaLocalFqdn
