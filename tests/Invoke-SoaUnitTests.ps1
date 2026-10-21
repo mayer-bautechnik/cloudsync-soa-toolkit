@@ -12,12 +12,13 @@
       manifest, GPO version / CSE merge (mocked AD cmdlets), SACL fingerprint, random secret, JSON array reading,
       run log, anonymizer and leak check
     - tools\Test-SoaSecurityClaims.ps1 against a script with deliberate violations (must fail)
+    - tools\Test-SoaScriptScope.ps1 against a script that overwrites script-level values (must fail)
     - Export-SoaReport.ps1 end to end against a mocked ActiveDirectory module (tests\mocks) and generated fixtures:
       L1-L20 evaluation, anonymization, map outside the folder, leak check, packaging refusal on a leak
     Child processes are used where mocks must not leak into the main test scope.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Exit code = number of failed assertions (0 = all passed).
 #>
 [CmdletBinding()]
@@ -45,13 +46,27 @@ Assert-Test (@($cfg.AgentHosts).Count -eq 2) 'config agent hosts'
 # Legacy key warning / validation
 $bad = Join-Path $tmp 'bad.psd1'
 "@{ AgentHosts=@('a'); RotationDays = 30; Pso=@{ MaxPasswordAgeDays = 0 } }" | Set-Content $bad
-try { Import-SoaConfig -Path $bad 3>$null | Out-Null; Assert $false 'invalid config throws' } catch { Assert-Test ($_.Exception.Message -match 'MaxPasswordAgeDays') 'invalid config throws (MaxPasswordAgeDays)' }
+try { Import-SoaConfig -Path $bad 3>$null | Out-Null; Assert-Test $false 'invalid config throws' } catch { Assert-Test ($_.Exception.Message -match 'MaxPasswordAgeDays') 'invalid config throws (MaxPasswordAgeDays)' }
 
 # Marker
 $mk = Get-SoaMarker -Config $cfg -Short -Purpose 'Test'
 Assert-Test (Test-SoaMarker $mk) 'marker recognized'
 Assert-Test ($mk -match 'do not modify manually') 'marker text'
 Assert-Test (-not (Test-SoaMarker 'something else')) 'non-marker not recognized'
+
+# Marker without configuration (scripts used on their own)
+$mk0 = Get-SoaMarker -Config $null -Purpose 'Standalone'
+Assert-Test ((Test-SoaMarker $mk0) -and $mk0 -match 'github\.com/mayer-bautechnik/cloudsync-soa-toolkit') 'marker without configuration uses the default project URL'
+
+# Diagnostics GPP item state (removePolicy, action, marker in desc)
+$rx = Join-Path $tmp 'Registry.xml'
+Set-Content -LiteralPath $rx -Encoding UTF8 -Value '<?xml version="1.0" encoding="utf-8"?><RegistrySettings clsid="{A3CCFC41-DFDB-43a5-8D26-0FE8B954DA51}"><Registry clsid="{9CD4B2F4-923D-47f5-A062-E897DD1DAD50}" name="2 Security Events" status="2 Security Events" image="10" changed="2026-10-16 12:00:00" uid="{11111111-2222-3333-4444-555555555555}"><Properties action="U" displayDecimal="1" default="0" hive="HKEY_LOCAL_MACHINE" key="SYSTEM\CurrentControlSet\Services\NTDS\Diagnostics" name="2 Security Events" type="REG_DWORD" value="00000001"/></Registry></RegistrySettings>'
+$st0 = Get-SoaDiagnosticsItemState -RegistryXmlPath $rx
+Assert-Test ($st0.Count -eq 1 -and -not $st0.RemovePolicy -and $st0.Action -eq 'U' -and -not $st0.Marked) 'diagnostics item: 1.x "Update" item without removePolicy detected (not adoptable)'
+(Get-Content -LiteralPath $rx -Raw) -replace '<Registry clsid', ('<Registry removePolicy="1" desc="' + (Get-SoaMarker -Config $cfg -Short) + '" clsid') | Set-Content -LiteralPath $rx -Encoding UTF8
+$st1 = Get-SoaDiagnosticsItemState -RegistryXmlPath $rx
+Assert-Test ($st1.RemovePolicy -and $st1.Marked) 'diagnostics item: removePolicy and marker in desc recognized'
+Assert-Test (-not (Get-SoaDiagnosticsItemState -RegistryXmlPath (Join-Path $tmp 'missing.xml')).Readable) 'diagnostics item: missing Registry.xml reported as not readable'
 
 # DN scope
 Assert-Test (Test-SoaDnInScope -Dn 'CN=u,OU=A,DC=c,DC=com' -ScopeDns @('DC=c,DC=com')) 'dn in domain scope'
@@ -206,13 +221,40 @@ Set-Content -LiteralPath (Join-Path $bad 'Bad.ps1') -Value @(
     'Set-ADAccountPassword -Identity x -Reset -NewPassword $p'
     '[Convert]::FromBase64String("eA==")'
 )
-& $exe -NoProfile -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') -Path $bad *> $null
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') -Path $bad *> $null
 Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaSecurityClaims.ps1 fails on a script with violations'
-& $exe -NoProfile -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') *> $null
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaSecurityClaims.ps1') *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaSecurityClaims.ps1 passes on the toolkit scripts'
 
+# Script scope checker must detect an overwritten script-level value (the 2.0.4 Install / Watch defect)
+$scopeDir = Join-Path $tmp 'scope'; New-Item -Path $scopeDir -ItemType Directory -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $scopeDir 'Bad.ps1') -Value @(
+    '$G = Get-SoaConstant ''Guid'''
+    '$Ucc = Get-SoaConstant ''Ucc'''
+    'switch ($x) { ''a'' { $g = Get-ADGroup x } }'
+    'foreach ($u in $users) { $ucc = [int]$u.y }'
+    '$m = Get-SoaManifest -Config $c'
+    'if ($z) { $m = Get-SoaManifest -Config $c }'
+    'function Test-Local { $g = 1 }'
+    '$sb = { $g = 2 }'
+)
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on a script that overwrites a script-level value'
+Set-Content -LiteralPath (Join-Path $scopeDir 'Bad.ps1') -Value @('$G = Get-SoaConstant ''Guid''', 'function Test-Local { $g = 1 }', '$sb = { $g = 2 }', '$m = Get-SoaManifest -Config $c', 'if ($z) { $m = Get-SoaManifest -Config $c }')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts function scope, stored script blocks and a deliberate refresh'
+Set-Content -LiteralPath (Join-Path $scopeDir 'Mod.psm1') -Value @('function New-Thing { [CmdletBinding(SupportsShouldProcess)] param($Name) if ($PSCmdlet.ShouldProcess($Name)) { } }')
+Set-Content -LiteralPath (Join-Path $scopeDir 'Caller.ps1') -Value @('[CmdletBinding(SupportsShouldProcess = $true)] param()', 'New-Thing -Name a')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails when a ShouldProcess module function is called without -WhatIf'
+Set-Content -LiteralPath (Join-Path $scopeDir 'Caller.ps1') -Value @('[CmdletBinding(SupportsShouldProcess = $true)] param()', 'New-Thing -Name a -WhatIf:$WhatIfPreference')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts -WhatIf:$WhatIfPreference'
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 passes on the toolkit scripts and tools'
+
 # Export-SoaReport.ps1 end to end (mocked ActiveDirectory module, child process)
-& $exe -NoProfile -File (Join-Path $ScriptRoot 'Test-SoaExportReport.ps1') -WorkPath (Join-Path $tmp 'export')
+& $exe -NoProfile -NonInteractive -File (Join-Path $ScriptRoot 'Test-SoaExportReport.ps1') -WorkPath (Join-Path $tmp 'export')
 Assert-Test ($LASTEXITCODE -eq 0) 'Export-SoaReport.ps1 end-to-end test (see output above)'
 } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

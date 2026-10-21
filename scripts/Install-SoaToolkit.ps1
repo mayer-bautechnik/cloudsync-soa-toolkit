@@ -61,7 +61,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -100,8 +100,8 @@ Initialize-SoaReportPath -Config $cfg
 $ctx      = Get-SoaContext
 $Cmdlet   = $PSCmdlet
 $pdc      = $ctx.Pdc
-$G        = Get-SoaConstant 'Guid'
-$S        = Get-SoaConstant 'Sid'
+$KnownGuid = Get-SoaConstant 'Guid'
+$KnownSid  = Get-SoaConstant 'Sid'
 $drive    = Initialize-SoaAdDrive -Server $pdc
 $manifest = Get-SoaManifest -Config $cfg
 $roles    = @(Get-SoaHostRoles -Config $cfg -Context $ctx)
@@ -114,6 +114,13 @@ function Write-InstallLog([string]$Text) {
 }
 function Save-Manifest { if (-not $WhatIfPreference) { Save-SoaManifest -Config $cfg -Manifest $manifest -Context $ctx } }
 function Get-ToolkitGroup([string]$Name) { Get-ADGroup -Filter "Name -eq '$Name'" -Server $pdc -Properties description, info, member }
+# A step needs an object that an earlier step creates. In a -WhatIf dry run (e.g. -Step All -WhatIf on a fresh domain)
+# that object does not exist yet: report it and skip the rest of the step (returns $false). In a real run: stop.
+function Test-StepPrerequisite($Object, [string]$Message) {
+    if ($Object) { return $true }
+    if ($WhatIfPreference) { Write-SoaLine SKIP "(WhatIf) $Message - an earlier step of this run would create it; the rest of this step is not simulated"; return $false }
+    throw $Message
+}
 
 $order = 'HostGroup', 'Gmsa', 'BatchLogonGpo', 'KirGpo', 'DiagnosticsGpo', 'AuditConfig', 'EnableRolling', 'Policy', 'Groups',
          'Pso', 'BreakGlass', 'Delegate', 'AllowList', 'DeployTasks', 'Conform', 'SetMode', 'RemoveLegacy', 'Verify'
@@ -305,7 +312,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             try { if (-not (Get-KdsRootKey)) { throw 'No KDS root key in the forest - create one first (Add-KdsRootKey) and wait for replication (up to 10 h).' } }
             catch [System.Management.Automation.CommandNotFoundException] { Write-Warning 'Get-KdsRootKey not available here - KDS root key not checked.' }
             $hg = Get-ToolkitGroup $cfg.HostGroupName
-            if (-not $hg) { throw "Group $($cfg.HostGroupName) not found - run -Step HostGroup first." }
+            if (-not (Test-StepPrerequisite $hg "Group $($cfg.HostGroupName) not found - run -Step HostGroup first.")) { break }
             $gmsa = Get-SoaJobGmsa -Config $cfg -Context $ctx
             if (-not $gmsa) {
                 if ($Cmdlet.ShouldProcess($cfg.GmsaName, 'Create gMSA')) {
@@ -357,7 +364,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         'BatchLogonGpo' {
             Write-SoaSection 'BatchLogonGpo: "Log on as a batch job" for the toolkit gMSA'
             $gmsa = Get-SoaJobGmsa -Config $cfg -Context $ctx
-            if (-not $gmsa) { throw "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first." }
+            if (-not (Test-StepPrerequisite $gmsa "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first.")) { break }
             $block = Get-SoaBatchRightBlock
 
             $targets = @(
@@ -386,7 +393,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 $desired = @(@($effective.Values | ForEach-Object { $_ }) + $gmsa.SID.Value | Where-Object { $_ -like 'S-1-*' } | Select-Object -Unique | Sort-Object)
 
                 $prevEntry = Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key $t.Key | Select-Object -First 1
-                $res = New-SoaGpo -Name $t.Name -Config $cfg -Context $ctx -Purpose "Grants 'Log on as a batch job' to the toolkit gMSA. Contains the complete list of this right (user rights from GPOs are not merged)"
+                $res = New-SoaGpo -Name $t.Name -Config $cfg -Context $ctx -Purpose "Grants 'Log on as a batch job' to the toolkit gMSA. Contains the complete list of this right (user rights from GPOs are not merged)" -WhatIf:$WhatIfPreference
                 if (-not $res) { continue }
                 $gpo = $res.Gpo
                 $currentLine = @(Get-SoaGpoSecurityTemplate -Id $gpo.Id -Context $ctx | Where-Object { $_ -match '^\s*SeBatchLogonRight\s*=' }) | Select-Object -First 1
@@ -512,7 +519,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 }
 
                 # 3. GPO with the registry values of the policy (applied without the ADMX; the ADMX only serves editing/reporting)
-                $res = New-SoaGpo -Name $gpoName -Config $cfg -Context $ctx -Purpose "Enables AD object enforcement on $($pkg.Label) domain controllers (Microsoft Group Policy package, KIR model). Removing it disables the feature after a DC restart"
+                $res = New-SoaGpo -Name $gpoName -Config $cfg -Context $ctx -Purpose "Enables AD object enforcement on $($pkg.Label) domain controllers (Microsoft Group Policy package, KIR model). Removing it disables the feature after a DC restart" -WhatIf:$WhatIfPreference
                 if (-not $res) { continue }
                 $gpo = $res.Gpo
                 foreach ($it in $def.Items) {
@@ -544,30 +551,48 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         #----------------------------------------------------------------------------------------------
         'DiagnosticsGpo' {
             Write-SoaSection "DiagnosticsGpo: $($cfg.DiagnosticsGpoName)"
-            $existed = [bool](Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx)
-            $legacy  = if ($cfg.LegacyDiagnosticsGpoName) { Get-SoaGpo -Name $cfg.LegacyDiagnosticsGpoName -Context $ctx } else { $null }
-            if (-not $existed -and $legacy) {
-                if ($Cmdlet.ShouldProcess($cfg.LegacyDiagnosticsGpoName, "Rename to '$($cfg.DiagnosticsGpoName)' (toolkit 1.x GPO)")) {
+            $diagScript = Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1'
+            $existing = Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx
+            $legacy   = if ($cfg.LegacyDiagnosticsGpoName) { Get-SoaGpo -Name $cfg.LegacyDiagnosticsGpoName -Context $ctx } else { $null }
+
+            # Toolkit 1.x GPO: adopt it only if its item removes the value again when the GPO no longer applies
+            if (-not $existing -and $legacy) {
+                $xmlPath = "\\$pdc\SYSVOL\$($ctx.DnsRoot)\Policies\{$($legacy.Id)}\Machine\Preferences\Registry\Registry.xml"
+                $item = Get-SoaDiagnosticsItemState -RegistryXmlPath $xmlPath
+                if ($item.Count -ne 1 -or -not $item.RemovePolicy) {
+                    Write-SoaLine FAIL ("Toolkit 1.x GPO '{0}' not adopted: {1}. Adopting it would leave the value on the DCs when the GPO is removed later. Remove it (Set-SoaDiagnosticsGpo.ps1 -Action Remove -GpoName '{0}' -Force -Refresh; then check '2 Security Events' on every DC) or fix the item in GPMC, and repeat this step." -f
+                        $cfg.LegacyDiagnosticsGpoName, $(if ($item.Count -ne 1) { "$($item.Count) registry item(s) for '2 Security Events'" } else { "item action '$($item.Action)' without 'Remove this item when it is no longer applied'" }))
+                    break
+                }
+                if ($Cmdlet.ShouldProcess($cfg.LegacyDiagnosticsGpoName, "Rename to '$($cfg.DiagnosticsGpoName)' and mark (toolkit 1.x GPO)")) {
                     Rename-GPO -Guid $legacy.Id -TargetName $cfg.DiagnosticsGpoName -Domain $ctx.DnsRoot -Server $pdc | Out-Null
                     $g2 = Get-GPO -Guid $legacy.Id -Domain $ctx.DnsRoot -Server $pdc
-                    $g2.Description = Get-SoaMarker -Config $cfg -Purpose "Sets NTDS\Diagnostics '2 Security Events'=1 (AD object enforcement events 3095/3097/3098). Toggle with Set-SoaDiagnosticsGpo.ps1"
+                    $g2.Description = Get-SoaMarker -Config $cfg -Purpose "Adopted from the toolkit 1.x GPO '$($cfg.LegacyDiagnosticsGpoName)'. Sets NTDS\Diagnostics '2 Security Events'=1 (AD object enforcement events 3095/3097/3098). Toggle with Set-SoaDiagnosticsGpo.ps1"
                     Write-SoaLine ADD "renamed '$($cfg.LegacyDiagnosticsGpoName)' -> '$($cfg.DiagnosticsGpoName)' and marked"
                     Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' -Action Adopted -Data @{ Id = "$($legacy.Id)"; Name = $cfg.DiagnosticsGpoName } -Previous @{ Name = $cfg.LegacyDiagnosticsGpoName }
                     Save-Manifest
-                    $existed = $true
-                }
+                    $existing = Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx
+                } else { break }
             }
-            $diagScript = Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1'
-            if (-not $existed) {
+
+            if (-not $existing) {
                 & $diagScript -Action Install -ConfigPath $ConfigPath -WhatIf:$WhatIfPreference
                 $g3 = Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx
                 if ($g3) { Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' -Action Created -Data @{ Id = "$($g3.Id)"; Name = $cfg.DiagnosticsGpoName }; Save-Manifest }
+                elseif ($WhatIfPreference) { break }
             } elseif (-not (Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics')) {
-                $g3 = Get-SoaGpo -Name $cfg.DiagnosticsGpoName -Context $ctx
-                Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' -Action $(if (Test-SoaMarker $g3.Description) { 'Created' } else { 'PreExisting' }) -Data @{ Id = "$($g3.Id)"; Name = $cfg.DiagnosticsGpoName }
+                Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' -Action $(if (Test-SoaMarker $existing.Description) { 'Created' } else { 'PreExisting' }) -Data @{ Id = "$($existing.Id)"; Name = $cfg.DiagnosticsGpoName }
                 Save-Manifest
             }
-            if (-not $WhatIfPreference) { & $diagScript -Action Enable -ConfigPath $ConfigPath -Refresh:$Refresh }
+
+            # Enable only a GPO the toolkit owns (created or adopted); a foreign GPO of the same name is left alone
+            $entry = Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' | Select-Object -First 1
+            if ($entry -and $entry.Action -eq 'PreExisting') {
+                Write-SoaLine WARN "GPO '$($cfg.DiagnosticsGpoName)' existed before the toolkit (no marker) - not changed and not enabled. Rename it or set DiagnosticsGpoName to another name, then repeat this step."
+                break
+            }
+            if (-not $WhatIfPreference) { & $diagScript -Action Enable -ConfigPath $ConfigPath -Refresh:$Refresh -Force }
+            else { Write-SoaLine SKIP '(WhatIf) link of the diagnostics GPO would be enabled after SYSVOL replication' }
         }
 
         #----------------------------------------------------------------------------------------------
@@ -595,7 +620,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             }
             if ($missing.Count -or $forceNeeded) {
                 $settings = @(foreach ($s in $missing.Values) { [pscustomobject]@{ Name = $s.Name; Guid = $s.Guid; Value = ($union[$s.Guid] -bor $s.Required) } })
-                $res = New-SoaGpo -Name $cfg.AuditGpoName -Config $cfg -Context $ctx -Purpose 'Adds ONLY the audit subcategories the toolkit needs and that were missing (current effective value OR required value, so no auditing is reduced)'
+                $res = New-SoaGpo -Name $cfg.AuditGpoName -Config $cfg -Context $ctx -Purpose 'Adds ONLY the audit subcategories the toolkit needs and that were missing (current effective value OR required value, so no auditing is reduced)' -WhatIf:$WhatIfPreference
                 if ($res) {
                     $gpo = $res.Gpo
                     # keep what this GPO already provides (otherwise those subcategories would be missing on the next run)
@@ -816,8 +841,8 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             } else { Write-SoaLine SAME "$($cfg.BreakGlassName) exists" }
             if ($bg) {
                 foreach ($dn in @(Get-SoaWriteScope -Config $cfg -Context $ctx)) {
-                    $a1 = Add-SoaAce -TargetDn $dn -Sid $bg.SID -Rights GenericAll -Inheritance Descendents -InheritedObjectType $G.UserClass -Label 'Full control (descendant users)' -WhatIf:$WhatIfPreference
-                    $a2 = Add-SoaAce -TargetDn $dn -Sid $bg.SID -Rights GenericAll -Inheritance Descendents -InheritedObjectType $G.GroupClass -Label 'Full control (descendant groups)' -WhatIf:$WhatIfPreference
+                    $a1 = Add-SoaAce -TargetDn $dn -Sid $bg.SID -Rights GenericAll -Inheritance Descendents -InheritedObjectType $KnownGuid.UserClass -Label 'Full control (descendant users)' -WhatIf:$WhatIfPreference
+                    $a2 = Add-SoaAce -TargetDn $dn -Sid $bg.SID -Rights GenericAll -Inheritance Descendents -InheritedObjectType $KnownGuid.GroupClass -Label 'Full control (descendant groups)' -WhatIf:$WhatIfPreference
                     foreach ($a in @($a1, $a2) | Where-Object { $_ }) { Set-SoaManifestEntry -Manifest $manifest -Kind 'Ace' -Key "$($a.TargetDn)|$($a.Sid)|$($a.Label)" -Action Created -Data $a }
                 }
                 $ex = Get-ToolkitGroup $cfg.ExcludeGroupName
@@ -830,17 +855,17 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         'Delegate' {
             Write-SoaSection "Delegate: least privilege for $($cfg.GmsaName)"
             $gmsa = Get-SoaJobGmsa -Config $cfg -Context $ctx
-            if (-not $gmsa) { throw "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first." }
+            if (-not (Test-StepPrerequisite $gmsa "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first.")) { break }
             $mode = Get-SoaPolicyMode -Context $ctx
             if ($mode -eq 'Enforced') { Write-Warning 'Policy is Enforced: ACL changes on marked objects (TestUser) are blocked for your account. Container ACLs still work.' }
             $aces = @()
             $scope = @(Get-SoaWriteScope -Config $cfg -Context $ctx)
             Write-Host ("Write scope ({0}): {1}" -f $cfg.WriteScope, ($scope -join '; '))
             foreach ($dn in $scope) {
-                $aces += Add-SoaAce -TargetDn $dn -Sid $gmsa.SID -Rights WriteProperty -ObjectType $G.UacAttr -Inheritance Descendents -InheritedObjectType $G.UserClass -Label 'Write userAccountControl (descendant users)' -WhatIf:$WhatIfPreference
+                $aces += Add-SoaAce -TargetDn $dn -Sid $gmsa.SID -Rights WriteProperty -ObjectType $KnownGuid.UacAttr -Inheritance Descendents -InheritedObjectType $KnownGuid.UserClass -Label 'Write userAccountControl (descendant users)' -WhatIf:$WhatIfPreference
             }
             $pg = Get-ToolkitGroup $cfg.PsoGroupName
-            if ($pg) { $aces += Add-SoaAce -TargetDn $pg.DistinguishedName -Sid $gmsa.SID -Rights WriteProperty -ObjectType $G.MemberAttr -Label "Write member ($($cfg.PsoGroupName))" -WhatIf:$WhatIfPreference }
+            if ($pg) { $aces += Add-SoaAce -TargetDn $pg.DistinguishedName -Sid $gmsa.SID -Rights WriteProperty -ObjectType $KnownGuid.MemberAttr -Label "Write member ($($cfg.PsoGroupName))" -WhatIf:$WhatIfPreference }
             else { Write-SoaLine WARN "group $($cfg.PsoGroupName) not found - run -Step Groups and repeat -Step Delegate" }
             $aces += Add-SoaAce -TargetDn $ctx.PscDN -Sid $gmsa.SID -Rights GenericRead -Inheritance All -Label 'Read password settings (monitoring of the PSO)' -WhatIf:$WhatIfPreference
             if ($cfg.TestUser) {
@@ -849,12 +874,12 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 else { Write-SoaLine WARN "TestUser $($cfg.TestUser) not found (create it in Entra ID and provision it first)" }
             }
             foreach ($a in @($aces | Where-Object { $_ })) { Set-SoaManifestEntry -Manifest $manifest -Kind 'Ace' -Key "$($a.TargetDn)|$($a.Sid)|$($a.Label)" -Action Created -Data $a }
-            $elr = Get-ADGroup -Identity $S.EventLogReaders -Server $pdc -Properties member
+            $elr = Get-ADGroup -Identity $KnownSid.EventLogReaders -Server $pdc -Properties member
             if (@($elr.member) -notcontains $gmsa.DistinguishedName) {
                 if ($Cmdlet.ShouldProcess('BUILTIN\Event Log Readers', "Add $($cfg.GmsaName) (monitor reads the Security / Directory Service logs on the DCs)")) {
                     Add-ADGroupMember -Identity $elr -Members $gmsa -Server $pdc
                     Write-SoaLine ADD "BUILTIN\Event Log Readers += $($cfg.GmsaName)"
-                    Set-SoaManifestEntry -Manifest $manifest -Kind 'Membership' -Key 'EventLogReaders' -Action Created -Data @{ Group = $S.EventLogReaders; Member = $gmsa.DistinguishedName }
+                    Set-SoaManifestEntry -Manifest $manifest -Kind 'Membership' -Key 'EventLogReaders' -Action Created -Data @{ Group = $KnownSid.EventLogReaders; Member = $gmsa.DistinguishedName }
                 }
             } else { Write-SoaLine SAME "BUILTIN\Event Log Readers contains $($cfg.GmsaName)" }
             Save-Manifest
@@ -910,10 +935,10 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         'DeployTasks' {
             Write-SoaSection 'DeployTasks: runtime scripts and scheduled tasks on every toolkit host'
             $gmsa = Get-SoaJobGmsa -Config $cfg -Context $ctx
-            if (-not $gmsa) { throw "gMSA $($cfg.GmsaName) not found." }
+            if (-not (Test-StepPrerequisite $gmsa "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first.")) { break }
             $agents = @(Get-SoaAgentGmsa -Config $cfg -Context $ctx)
             if (-not $agents.Count) { throw 'No agent gMSA found - the event triggers need the agent SID(s).' }
-            $subs = Get-SoaEventSubscription -AgentSids @($agents | ForEach-Object { $_.Sid })
+            $eventSubs = Get-SoaEventSubscription -AgentSids @($agents | ForEach-Object { $_.Sid })
 
             # Staging (+ optional code signing)
             $files = 'SoaToolkit.psm1', 'SoaToolkit.config.psd1', 'Invoke-CloudUserConformance.ps1', 'Watch-CloudUserConformance.ps1'
@@ -996,7 +1021,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                     $P = @{
                         UserId = ('{0}\{1}$' -f $ctx.NetBios, $cfg.GmsaName); TaskFolder = $cfg.TaskFolder; InstallPath = $cfg.ScriptInstallPath
                         IsDc = $r.IsDc; IsAgent = $r.IsAgent; ExecutionPolicy = $execPolicy; EventLog = $cfg.EventLogName
-                        SubscriptionUserCreated = $subs.UserCreated; SubscriptionSoaWritten = $subs.SoaWritten; DelaySeconds = [int]$cfg.EventTriggerDelaySeconds
+                        SubscriptionUserCreated = $eventSubs.UserCreated; SubscriptionSoaWritten = $eventSubs.SoaWritten; DelaySeconds = [int]$cfg.EventTriggerDelaySeconds
                         ReconcileMinutes = [int]$cfg.ReconcileMinutes; ReconcileOffset = [int]([Math]::Floor([Math]::Max(5, [int]$cfg.ReconcileMinutes) * $agentIdx / $agentCount))
                         MonitorMinutes = [int]$cfg.MonitorMinutes; MonitorOffset = (($hostIdx * 7) % [Math]::Max(10, [int]$cfg.MonitorMinutes))
                         Marker = (Get-SoaMarker -Config $cfg -Short)
@@ -1017,8 +1042,8 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
             Save-Manifest
             Write-Host ''
-            Write-Host ("Event subscription (4720): {0}" -f $subs.XPathUserCreated) -ForegroundColor DarkGray
-            Write-Host ("Event subscription (5136): {0}" -f $subs.XPathSoaWritten) -ForegroundColor DarkGray
+            Write-Host ("Event subscription (4720): {0}" -f $eventSubs.XPathUserCreated) -ForegroundColor DarkGray
+            Write-Host ("Event subscription (5136): {0}" -f $eventSubs.XPathSoaWritten) -ForegroundColor DarkGray
         }
 
         #----------------------------------------------------------------------------------------------

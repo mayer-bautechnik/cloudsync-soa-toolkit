@@ -209,7 +209,8 @@ All of them carry the marker **`[SoaToolkit] Managed by SOA Toolkit - do not mod
 | Groups | `SOA-Toolkit-Hosts`, `SOA-CloudUsers-PSO`, `SOA-CloudUsers-Exclude`, `SOA-CloudUsers-Pilot` | description, info |
 | PSO | `PSO-SOA-CloudUsers` | description |
 | Enforcement policy (only if created by the toolkit) | `CN=Cloud` | description |
-| GPOs | `SOA Toolkit - DC - …`, `SOA Toolkit - Agent Hosts - Batch Logon` | GPO comment |
+| GPOs | `SOA Toolkit - DC - …`, `SOA Toolkit - Agent Hosts - Batch Logon` | GPO comment (read with `Get-GPO` → `Description`; Group Policy keeps it in SYSVOL, not in an AD attribute) |
+| GPP registry item of the diagnostics GPO | `2 Security Events` | item description (GPMC tab *Common*), since 2.0.5 |
 | WMI filters | `SOA Toolkit - OS build …` | description |
 | Tasks | `\SoaToolkit\CloudUserConformance-Event`, `…-Reconcile`, `\SoaToolkit\Monitor` | task description |
 | Files | `%ProgramFiles%\SoaToolkit\*`, `%ProgramData%\SoaToolkit\*` | file header |
@@ -227,6 +228,10 @@ Active Directory has no description field for access-control entries, audit entr
 | SACL entry for `msDS-ObjectSoa` | **exact fingerprint**: trustee Everyone (`S-1-1-0`), audit *Success* only, right *WriteProperty* only, object type = schemaIDGUID of `msDS-ObjectSoa`, inheritance *Descendents*, inherited object type = `user`, explicit; plus the manifest | `-Step RemoveAudit` removes only entries with exactly this fingerprint, and only on the containers the manifest lists |
 | Domain setting `msDS-ExpirePasswordsOnSmartCardOnlyAccounts` | manifest (previous value) | `-Step RestoreRolling` restores the previous value |
 | User attributes (SCRIL, PNE) and PSO group membership | target state + manifest of the conformance runs; user objects are deliberately **not** marked (Cloud Sync owns them) | `-Step RevertUsers` (explicit, with warning) |
+| GPO links | GPO id + target OU in the manifest; only links of marked GPOs are changed | removed together with the GPO |
+| Registry value `NTDS\Diagnostics\2 Security Events` on the DCs | set by the marked diagnostics GPO with "Remove this item when it is no longer applied" | disappears when the GPO no longer applies (`-Step RemoveDiagnosticsGpo`) |
 | ADMX / ADML copied to the central store | Microsoft files, copied unchanged and therefore not marked; path + hash recorded in the manifest (kind `AdmxFiles`) | `-Step RemoveKirGpo -RemoveAdmx`, only if the file is unchanged |
+
+**A GPO of the toolkit's name without the marker** (created by someone else) is never changed: `Set-SoaDiagnosticsGpo.ps1 -Action Enable / Remove` refuse it without `-Force`, and `Install-SoaToolkit.ps1` records it as *PreExisting* and leaves its link alone. The toolkit 1.x diagnostics GPO is adopted (renamed and marked) only if its item has "Remove this item when it is no longer applied".
 
 The toolkit **never** relies on audit or access rules it did not create. Broader rules that also produce event 5136 (for example a diagnostic SACL "Everyone, Write all properties, Success + Failure") are reported by `AuditConfig` and by the monitor check `AUD-SACL-OTHER`. If they were only created for a diagnosis, remove them; the toolkit entry stays in place.

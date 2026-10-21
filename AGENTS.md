@@ -44,16 +44,17 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
    - Every source file carries the MPL-2.0 header.
    - Naming: `Soa*` = toolkit / infrastructure, `CloudUser*` = target state of users, approved verbs only.
    - Shared logic goes into `SoaToolkit.psm1`.
+   - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module.
 8. **One version.** `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `.NOTES` line of every script, the configuration header, the README status line and CHANGELOG must match. `tools/Test-SoaRepoHygiene.ps1` checks this (H6).
 
 ## How to check a change
 
 ```powershell
-.\tools\Invoke-SoaStaticChecks.ps1      # parser, PSScriptAnalyzer, tests, security claims, hygiene
+.\tools\Invoke-SoaStaticChecks.ps1      # parser, PSScriptAnalyzer, tests, security claims, script scope, hygiene
 ```
 
 CI runs the same checks on PowerShell 7 and Windows PowerShell 5.1. A release is tagged and published only after both CI jobs are green for the release commit ([docs/RELEASING.md](docs/RELEASING.md)). Behaviour in a real domain can only be verified in a lab (docs/VALIDATION.md). Say so instead of claiming it.
 
 ## Commits
 
-Sign off every commit (`git commit -s`, DCO). Write messages in English, imperative mood, with a subject of 72 characters or less. If an AI tool contributed substantially, add a trailer such as `Assisted-by: <tool>`. The human who signs off is responsible for the change.
+Sign off every commit (`git commit -s`, DCO). Write messages in English, imperative mood, with a subject of 72 characters or less. If an AI tool contributed substantially, add the trailer `Assisted-by: <tool> (<vendor>)` - the maintainer uses `Assisted-by: Claude (Anthropic)`. The human who signs off is responsible for the change.

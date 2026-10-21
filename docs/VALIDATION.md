@@ -2,7 +2,7 @@
 
 The findings K1-K21 describe Microsoft's features and were measured or researched before and during the development of 2.x. This checklist verifies **the toolkit itself** end to end in a lab domain. Until an item is verified, its status below is *open*. The README status section links here.
 
-**Status on 2026-10-21 (release 2.0.4): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
+**Status on 2026-10-21 (release 2.0.5): all items open.** The 2.x scripts have passed parser, PSScriptAnalyzer, unit tests, an end-to-end test against a mocked AD module and the static security-claim checks. They have **not** yet run in a real domain.
 
 ## How to run it
 
@@ -25,7 +25,7 @@ The findings K1-K21 describe Microsoft's features and were measured or researche
 | # | Check | How | Expected | Evaluated from | Status |
 |---|---|---|---|---|---|
 | L1 | Prerequisites | `.\Test-SoaPrerequisites.ps1` | all PASS or explained | latest prerequisites report | open |
-| L2 | Installation dry run | `.\Install-SoaToolkit.ps1 -Step All -KirMsi2025 <msi> -WhatIf` | no unexpected planned change | install run log (planned ADD/DEL), then `-Record L2` | open |
+| L2 | Installation dry run | `.\Install-SoaToolkit.ps1 -Step All -KirMsi2025 <msi> -WhatIf` | no unexpected planned change; nothing created (on a fresh domain, steps that need the host group or gMSA report `(WhatIf) ... not simulated further`) | install run log (planned ADD/DEL), then `-Record L2` | open |
 | L3 | Installation and idempotency | `-Step All`, restart the writable DCs one at a time, `-Step All` again | second run: only SAME, no ADD / DEL / FAIL | install run logs | open |
 | L4 | Batch logon GPO keeps existing rights | before / after on every DC and agent host: `secedit /export /cfg c:\temp\ur.inf /areas USER_RIGHTS`, compare `SeBatchLogonRight` | after = before + toolkit gMSA | monitor `BATCH`, then `-Record L4` | open |
 | L5 | KIR GPO, WMI filter, engine per DC | `.\Watch-CloudUserConformance.ps1 -Html` | `DC-NTDSAI`, `DC-KIR`, `DC-LOAD` PASS on every writable DC | monitor report | open |

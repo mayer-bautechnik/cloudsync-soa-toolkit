@@ -33,9 +33,11 @@ private/
 pseudonyms.csv
 *.local.txt
 
-# Release packages and signing material
+# Release packages and signing material (SHA256SUMS.txt exists only inside the release zip,
+# e.g. after extracting a release asset into the working copy)
 *.zip
 *.sha256
+/SHA256SUMS.txt
 *.pfx
 *.p12
 *.cer

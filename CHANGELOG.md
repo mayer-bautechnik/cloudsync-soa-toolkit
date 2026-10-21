@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.5 – 2026-10-21
+
+Fixes two defects found in the first lab run of `Install-SoaToolkit.ps1 -Step All` and one in the monitor, adds a static check against this class of defect, and tightens the ownership of the diagnostics GPO.
+
+### Fixed
+
+- **`Install-SoaToolkit.ps1 -Step Delegate` stopped with "Cannot convert null to type System.Guid"** (affected: 2.0.0-2.0.4). PowerShell variable names are case-insensitive, and the steps share one scope: `$g = Get-ADGroup ...` in the steps HostGroup and Groups replaced the GUID table `$G`, and `foreach ($s in ...)` in AuditConfig, Policy and AllowList replaced the SID table `$S`. Delegate then passed `$null` as the attribute GUID. Nothing was written with a wrong value: the step failed before its first ACE, and `BreakGlass` (the only other user of `$G`) is not part of `-Step All`. The tables are now `$KnownGuid` / `$KnownSid` in every script. Re-run `-Step All`; it is idempotent.
+- **Monitor: locked-out and expired accounts were never reported** (affected: 2.0.0-2.0.4). In `Watch-CloudUserConformance.ps1` the per-user value `$ucc` replaced the flag table `$Ucc`, so the checks `USR-LOCKED` and the expiry checks compared against `$null`. The table is now `$UccFlag`.
+- **`-WhatIf` could create GPOs** (affected: 2.0.0-2.0.4). Preference variables do not reach functions of a script module, and `New-SoaGpo` was called without `-WhatIf:$WhatIfPreference` in the steps BatchLogonGpo, KirGpo and AuditConfig. A dry run that reached these steps created the (empty, unlinked) GPOs. Check with `Uninstall-SoaToolkit.ps1 -Step Verify` or GPMC whether such GPOs exist after an earlier dry run; a later real run uses them.
+- **`-Step All -WhatIf` on a fresh domain stopped at the Gmsa step** ("Group SOA-Toolkit-Hosts not found"). Steps that need an object an earlier step creates (host group, gMSA) now report `(WhatIf) ... not simulated further` and continue with the next step; a real run still stops.
+
+### Changed
+
+- **Diagnostics GPO ownership and markers** (`Set-SoaDiagnosticsGpo.ps1`, `Install-SoaToolkit.ps1 -Step DiagnosticsGpo`):
+  - The marker is set also when the script is used on its own without a configuration (default project URL); a configuration that fails to load is reported instead of silently ignored.
+  - The GPP registry item carries a short marker in its description (GPMC tab *Common*). `-Action Enable` adds it to toolkit GPOs created by older versions.
+  - `-Action Enable` and `-Action Remove` refuse a GPO of the same name without the marker unless `-Force`; Install no longer enables a pre-existing foreign GPO (WARN instead).
+  - The toolkit 1.x GPO is adopted only if its item has "Remove this item when it is no longer applied"; otherwise the step reports FAIL with instructions and changes nothing.
+  - `Get-SoaMarker` accepts a missing configuration; new module function `Get-SoaDiagnosticsItemState`.
+- Repository: `SHA256SUMS.txt` at the top level is git-ignored (it belongs only to the release zip). `AGENTS.md` / `CONTRIBUTING.md` name the trailer format `Assisted-by: <tool> (<vendor>)`.
+- CI: `actions/checkout` v4 (Node.js 20, deprecated on GitHub-hosted runners) replaced by v6.0.0 (Node.js 24), pinned to its commit SHA. New `.github/dependabot.yml` keeps the actions current.
+- CI: job and step time limits (a hang fails after minutes instead of the 6-hour default) and `-NonInteractive` for every PowerShell process of the checks and tests, so a prompt fails visibly instead of waiting.
+
+### New
+
+- **`tools/Test-SoaScriptScope.ps1`**, part of `Invoke-SoaStaticChecks.ps1` and the unit tests (so it also runs under Windows PowerShell 5.1 in CI):
+  - no script-level context value (assigned from `Get-Soa*` / `Import-Soa*` / `Initialize-Soa*` / `Select-Soa*`) is overwritten later in the same scope, case-insensitive, including `foreach` variables;
+  - every call of a module function with `SupportsShouldProcess` from a script that supports `-WhatIf` passes `-WhatIf:$WhatIfPreference`.
+  Both checks report the 2.0.4 defects above when run against 2.0.4.
+
 ## 2.0.4 – 2026-10-21
 
 Configuration and terms as top-level templates, safe operation without a separate admin workstation, a properly sized event log and central collection, stable pseudonyms in reports.

@@ -1,0 +1,15 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+#
+# Keeps the pinned GitHub Actions current (pull requests with the new commit SHA and version comment).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies]

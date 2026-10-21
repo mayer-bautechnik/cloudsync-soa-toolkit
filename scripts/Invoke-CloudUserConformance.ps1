@@ -39,7 +39,7 @@
             (1000 change, 1001 warning, 1002 error, 1010 run summary). Exit code 0 = OK, 1 = errors.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Reads and writes go to one DC per run: the local DC on a writable DC, otherwise a discovered writable DC.
 #>
 [CmdletBinding()]
@@ -74,7 +74,7 @@ $cfg     = Import-SoaConfig -Path $ConfigPath
 $server  = Select-SoaTargetDc -Preferred $Server
 $Uac     = Get-SoaConstant 'Uac'
 $Ucc     = Get-SoaConstant 'Ucc'
-$G       = Get-SoaConstant 'Guid'
+$KnownGuid = Get-SoaConstant 'Guid'
 $EventId = Get-SoaConstant 'EventId'
 $logName = 'Conformance'
 $runAs   = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -132,13 +132,13 @@ if ($Mode -eq 'Test') {
             'PneOff'        { [void](Set-SoaUacFlags -Dn $dn -Server $server -ClearBits $Uac.DontExpire) }
             'DenyChangeOn'  {
                 $acl = Get-Acl -Path "$drive\$dn"
-                foreach ($s in 'S-1-1-0', 'S-1-5-10') { $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule([Security.Principal.SecurityIdentifier]$s, 'ExtendedRight', 'Deny', $G.ChangePwd))) }
+                foreach ($s in 'S-1-1-0', 'S-1-5-10') { $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule([Security.Principal.SecurityIdentifier]$s, 'ExtendedRight', 'Deny', $KnownGuid.ChangePwd))) }
                 Set-Acl -Path "$drive\$dn" -AclObject $acl
             }
             'DenyChangeOff' {
                 $acl = Get-Acl -Path "$drive\$dn"
                 foreach ($r in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
-                    if ("$($r.AccessControlType)" -eq 'Deny' -and $r.ObjectType -eq $G.ChangePwd -and $r.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10') { [void]$acl.RemoveAccessRuleSpecific($r) }
+                    if ("$($r.AccessControlType)" -eq 'Deny' -and $r.ObjectType -eq $KnownGuid.ChangePwd -and $r.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10') { [void]$acl.RemoveAccessRuleSpecific($r) }
                 }
                 Set-Acl -Path "$drive\$dn" -AclObject $acl
             }
@@ -197,7 +197,7 @@ if ($Mode -eq 'Analyze') {
         if ($IncludeAcl) {
             try {
                 $acl = Get-Acl -Path "$drive\$($u.DistinguishedName)"
-                $deny = (@($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.AccessControlType)" -eq 'Deny' -and $_.ObjectType -eq $G.ChangePwd }).Count -gt 0)
+                $deny = (@($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.AccessControlType)" -eq 'Deny' -and $_.ObjectType -eq $KnownGuid.ChangePwd }).Count -gt 0)
             } catch { }
         }
         $changes = @()

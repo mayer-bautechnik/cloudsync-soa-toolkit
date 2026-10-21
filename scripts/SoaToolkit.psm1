@@ -22,7 +22,7 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.4'
+$script:SoaVersion     = '2.0.5'
 $script:SoaReleaseDate = '2026-10-21'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
@@ -113,18 +113,40 @@ function Get-SoaConstant([string]$Name) {
 #>
 function Get-SoaMarker {
     param(
-        [Parameter(Mandatory)] $Config,
+        $Config,                 # optional: without a configuration (scripts used on their own) the default project URL is used
         [string] $Purpose,
         [switch] $Short
     )
     $p = if ($Purpose) { " $Purpose." } else { '' }
+    $url = if ($Config -and $Config.ProjectUrl) { $Config.ProjectUrl } else { $script:SoaConfigDefaults.ProjectUrl }
     if ($Short) {
-        return ('{0} Managed by SOA Toolkit - do not modify manually.{1} {2}' -f $script:SoaTag, $p, $Config.ProjectUrl).Trim()
+        return ('{0} Managed by SOA Toolkit - do not modify manually.{1} {2}' -f $script:SoaTag, $p, $url).Trim()
     }
     $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { $env:USERNAME }
     ('{0} Managed by SOA Toolkit ({1} {2}) - do not modify manually.{3} Created {4:yyyy-MM-dd} by {5}. ' +
      'Changes are detected by Watch-CloudUserConformance.ps1; Uninstall-SoaToolkit.ps1 removes this object. {6}') -f
-        $script:SoaTag, $script:SoaProduct, $script:SoaVersion, $p, (Get-Date), $who, $Config.ProjectUrl
+        $script:SoaTag, $script:SoaProduct, $script:SoaVersion, $p, (Get-Date), $who, $url
+}
+
+<#
+    State of the NTDS diagnostics item ("2 Security Events") in a GPP Registry.xml: does the item exist, is
+    "Remove this item when it is no longer applied" (removePolicy="1") set, and does its description (attribute
+    desc, GPMC tab Common) carry the marker. Used by Set-SoaDiagnosticsGpo.ps1 and Install-SoaToolkit.ps1 (adoption
+    of the toolkit 1.x GPO).
+#>
+function Get-SoaDiagnosticsItemState {
+    param([Parameter(Mandatory)][string]$RegistryXmlPath, [string]$ValueName = '2 Security Events')
+    $state = [pscustomobject]@{ Path = $RegistryXmlPath; Readable = $false; Count = 0; RemovePolicy = $false; Action = $null; Marked = $false }
+    try { [xml]$xml = Get-Content -LiteralPath $RegistryXmlPath -Raw -ErrorAction Stop } catch { return $state }
+    $state.Readable = $true
+    $items = @($xml.SelectNodes("//Registry[Properties[@name='$ValueName']]"))
+    $state.Count = $items.Count
+    if ($items.Count -eq 1) {
+        $state.RemovePolicy = ($items[0].GetAttribute('removePolicy') -eq '1')
+        $state.Action = $items[0].SelectSingleNode('Properties').GetAttribute('action')
+        $state.Marked = Test-SoaMarker $items[0].GetAttribute('desc')
+    }
+    $state
 }
 
 function Test-SoaMarker([string]$Text) {

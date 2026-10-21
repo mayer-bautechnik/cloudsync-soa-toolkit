@@ -37,7 +37,7 @@
             behavior-findings.json and behavior-report.html
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT). WinRM to the DCs and agent hosts.
 #>
 [CmdletBinding()]
@@ -79,7 +79,7 @@ $baselinePath = Join-Path $OutputPath 'rolling-baseline.json'
 $reportPath   = Join-Path $OutputPath 'behavior-report.html'
 $Uac  = Get-SoaConstant 'Uac'
 $Ucc  = Get-SoaConstant 'Ucc'
-$G    = Get-SoaConstant 'Guid'
+$KnownGuid = Get-SoaConstant 'Guid'
 $drive = Initialize-SoaAdDrive -Server $pdc
 $dcs  = $ctx.WritableDcs
 $roles = @(Get-SoaHostRoles -Config $cfg -Context $ctx)
@@ -136,7 +136,7 @@ function Write-Report {
 #region --- Helpers: directory state ---------------------------------------------------------------
 function Get-DenyChangeState([string]$Dn) {
     $acl = Get-Acl -Path "$drive\$Dn"
-    (@($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.AccessControlType)" -eq 'Deny' -and $_.ObjectType -eq $G.ChangePwd -and $_.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10' }).Count -ge 2)
+    (@($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.AccessControlType)" -eq 'Deny' -and $_.ObjectType -eq $KnownGuid.ChangePwd -and $_.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10' }).Count -ge 2)
 }
 
 function Get-Snapshot([string]$Dn, [string]$Server = $pdc, [switch]$IncludeAcl) {
@@ -229,12 +229,12 @@ function Invoke-TestAction([string]$Action, [string]$Dn, [string]$Sam, [string]$
             'PneOff'        { [void](Set-SoaUacFlags -Dn $Dn -Server $pdc -ClearBits $Uac.DontExpire) }
             'DenyChangeOn'  {
                 $acl = Get-Acl -Path "$drive\$Dn"
-                foreach ($s in 'S-1-1-0', 'S-1-5-10') { $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule([Security.Principal.SecurityIdentifier]$s, 'ExtendedRight', 'Deny', $G.ChangePwd))) }
+                foreach ($s in 'S-1-1-0', 'S-1-5-10') { $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule([Security.Principal.SecurityIdentifier]$s, 'ExtendedRight', 'Deny', $KnownGuid.ChangePwd))) }
                 Set-Acl -Path "$drive\$Dn" -AclObject $acl
             }
             'DenyChangeOff' {
                 $acl = Get-Acl -Path "$drive\$Dn"
-                foreach ($r in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) { if ("$($r.AccessControlType)" -eq 'Deny' -and $r.ObjectType -eq $G.ChangePwd -and $r.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10') { [void]$acl.RemoveAccessRuleSpecific($r) } }
+                foreach ($r in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) { if ("$($r.AccessControlType)" -eq 'Deny' -and $r.ObjectType -eq $KnownGuid.ChangePwd -and $r.IdentityReference.Value -in 'S-1-1-0', 'S-1-5-10') { [void]$acl.RemoveAccessRuleSpecific($r) } }
                 Set-Acl -Path "$drive\$Dn" -AclObject $acl
             }
             'GroupRemove'   { Remove-ADGroupMember -Identity $cfg.PsoGroupName -Members $Dn -Server $pdc -Confirm:$false }

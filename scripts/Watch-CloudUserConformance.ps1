@@ -35,7 +35,7 @@
     Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -64,7 +64,7 @@ $cfg      = Import-SoaConfig -Path $ConfigPath
 if ($Scope -eq 'All') { Assert-SoaAdminPaths -Config $cfg -ScriptRoot $ScriptRoot; Initialize-SoaReportPath -Config $cfg }
 $server   = Select-SoaTargetDc
 $ctx      = Get-SoaContext -Server $server
-$Ucc      = Get-SoaConstant 'Ucc'
+$UccFlag  = Get-SoaConstant 'Ucc'
 $EventId  = Get-SoaConstant 'EventId'
 $minNtdsai = Get-SoaConstant 'MinNtdsai'
 $auditReq = Get-SoaConstant 'Audit'
@@ -467,8 +467,8 @@ if ($domainChecks) {
                 if (-not $c.InPsoGroup) { & $add $(if ($young) { 'WARN' } else { 'FAIL' }) "not in $($cfg.PsoGroupName) - domain password policy applies" 'USR-PSOGROUP' }
                 if ($psoDn -and $u.'msDS-ResultantPSO' -and "$($u.'msDS-ResultantPSO')".ToLower() -ne $psoDn) { & $add 'WARN' "resultant PSO is $($u.'msDS-ResultantPSO')" 'USR-RPSO' }
                 if (-not $c.Writable) { & $add 'FAIL' 'outside the write scope - the toolkit cannot correct this user' 'USR-WRITE' }
-                if ($ucc -band $Ucc.Locked) { & $add 'FAIL' 'LOCKED OUT - Kerberos sign-in blocked' 'USR-LOCKED' }
-                if (($ucc -band $Ucc.Expired) -and $c.Scril -and -not $c.Pne) {
+                if ($ucc -band $UccFlag.Locked) { & $add 'FAIL' 'LOCKED OUT - Kerberos sign-in blocked' 'USR-LOCKED' }
+                if (($ucc -band $UccFlag.Expired) -and $c.Scril -and -not $c.Pne) {
                     $secretT = if ($md) { $md.SecretTime } else { $null }
                     if ($ll -and $secretT -and $expiry -and $ll -gt ([datetime]$(if ($secretT -gt $expiry) { $secretT } else { $expiry })).AddMinutes(5) -and $lastLogon.Count) {
                         & $add 'FAIL' ("signed in at {0:yyyy-MM-dd HH:mm} while expired, but the secret was not rolled (last change {1:yyyy-MM-dd HH:mm})" -f $ll, $secretT) 'USR-NOROLL'
@@ -477,7 +477,7 @@ if ($domainChecks) {
                     } else {
                         & $add 'INFO' 'secret expired - the DC rolls it at the next passwordless sign-in' 'USR-EXPIRED'
                     }
-                } elseif (($ucc -band $Ucc.Expired) -and -not $c.Scril) {
+                } elseif (($ucc -band $UccFlag.Expired) -and -not $c.Scril) {
                     & $add 'FAIL' 'PASSWORD EXPIRED without SCRIL - passwordless sign-in fails (0x17)' 'USR-EXPIRED-NOSCRIL'
                 }
                 if ($neverReveal.ContainsKey($u.DistinguishedName.ToLower())) { & $add 'FAIL' "denied by the AzureADKerberos password replication policy (group '$($neverReveal[$u.DistinguishedName.ToLower()])')" 'USR-NEVERREVEAL' }

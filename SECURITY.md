@@ -25,7 +25,7 @@ Supported versions: the latest release (2.x).
 ```powershell
 .\tools\Test-SoaSecurityClaims.ps1            # S1, S2, S3, S5 + inventory of every write operation
 .\tools\Test-SoaSecurityClaims.ps1 -Json claims.json
-.\tools\Invoke-SoaStaticChecks.ps1            # all checks: parser, analyzer, tests, claims, hygiene
+.\tools\Invoke-SoaStaticChecks.ps1            # all checks: parser, analyzer, tests, claims, script scope, hygiene
 ```
 
 The static check covers the code as written. Comments and help text are not code. Behaviour in a domain is covered by the lab validation ([docs/VALIDATION.md](docs/VALIDATION.md)).

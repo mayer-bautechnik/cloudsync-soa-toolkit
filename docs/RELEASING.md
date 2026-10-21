@@ -102,7 +102,7 @@ The release cannot be replaced, and that is intended: users and reviewers rely o
   - branch protection on `main`: signed commits, both CI jobs required as status checks, no force pushes;
   - immutable releases on;
   - private vulnerability reporting on;
-  - Dependabot for GitHub Actions.
-- **CI hardening:** pin `actions/checkout` in `.github/workflows/ci.yml` to the full commit SHA of the release in use, with the version as a comment.
+  - Dependabot for GitHub Actions: `.github/dependabot.yml` is in the repository. Enable *Dependabot version updates* if it is not active, and review its pull requests like any other change.
+- **CI hardening:** actions are pinned to the full commit SHA with the version as a comment (currently `actions/checkout` v6.0.0, Node.js 24). Before accepting a new pin, compare the SHA with the release tag in the action's repository.
 - **GitHub CLI** (`gh auth login`) on the release workstation, for the CI gate in step 6.
 - **Terms file:** create `SoaToolkit.terms.txt` at the top level from `SoaToolkit.terms.example.txt`. It is git-ignored. List company domains, internal host names and other identifiers; `Test-SoaRepoHygiene.ps1` (H5) then blocks them, and `Export-SoaReport.ps1` uses the same file for pseudonyms.

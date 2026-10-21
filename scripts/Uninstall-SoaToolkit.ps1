@@ -59,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.4 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.
@@ -104,7 +104,7 @@ $ctx      = Get-SoaContext
 $pdc      = $ctx.Pdc
 $Cmdlet   = $PSCmdlet
 $Uac      = Get-SoaConstant 'Uac'
-$S        = Get-SoaConstant 'Sid'
+$KnownSid  = Get-SoaConstant 'Sid'
 $drive    = Initialize-SoaAdDrive -Server $pdc
 $manifest = Get-SoaManifest -Config $cfg
 $hasManifest = Test-Path -LiteralPath (Get-SoaManifestPath -Config $cfg)
@@ -331,7 +331,7 @@ foreach ($current in ($order | Where-Object { $selected -contains $_ })) {
                 }
             }
             if ($j) {
-                $elr = Get-ADGroup -Identity $S.EventLogReaders -Server $pdc -Properties member
+                $elr = Get-ADGroup -Identity $KnownSid.EventLogReaders -Server $pdc -Properties member
                 if (@($elr.member) -contains $j.DistinguishedName -and $Cmdlet.ShouldProcess('BUILTIN\Event Log Readers', "Remove $($cfg.GmsaName)")) {
                     Remove-ADGroupMember -Identity $elr -Members $j -Server $pdc -Confirm:$false
                     Write-SoaLine DEL "BUILTIN\Event Log Readers -= $($cfg.GmsaName)"
@@ -425,7 +425,7 @@ foreach ($current in ($order | Where-Object { $selected -contains $_ })) {
             $entry = Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics' | Select-Object -First 1
             if (-not $g) { Write-SoaLine SKIP 'not found'; break }
             if (-not (Test-Owned $entry $g.Description)) { Write-SoaLine SKIP 'not created by the toolkit'; break }
-            & (Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1') -Action Remove -ConfigPath $ConfigPath -Refresh:$Refresh -WhatIf:$WhatIfPreference -Confirm:$false
+            & (Join-Path $ScriptRoot 'Set-SoaDiagnosticsGpo.ps1') -Action Remove -ConfigPath $ConfigPath -Refresh:$Refresh -Force -WhatIf:$WhatIfPreference -Confirm:$false   # ownership checked above (manifest / marker)
             if (-not $WhatIfPreference) { Remove-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key 'Diagnostics'; Save-Manifest }
         }
 

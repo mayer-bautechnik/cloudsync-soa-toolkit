@@ -39,7 +39,7 @@ The sign-off line (`Signed-off-by: Name <email>`) confirms that you have the rig
 
 - Read [AGENTS.md](AGENTS.md) (rules that must stay true) and, for design questions, [docs/DECISIONS.md](docs/DECISIONS.md).
 - Your `SoaToolkit.config.psd1` and `SoaToolkit.terms.txt` are git-ignored. Change only the templates (`*.example.*`), and keep them free of real values.
-- Run `.\tools\Invoke-SoaStaticChecks.ps1` before you open a pull request. It runs the parser, PSScriptAnalyzer, the tests, the security claims and the hygiene checks. Started from PowerShell 7 on Windows, it also runs the tests under Windows PowerShell 5.1. CI runs the same checks on both versions, and a pull request is merged only when CI is green.
+- Run `.\tools\Invoke-SoaStaticChecks.ps1` before you open a pull request. It runs the parser, PSScriptAnalyzer, the tests, the security claims, the script-scope check and the hygiene checks. Started from PowerShell 7 on Windows, it also runs the tests under Windows PowerShell 5.1. CI runs the same checks on both versions, and a pull request is merged only when CI is green.
 - Target Windows PowerShell 5.1 **and** PowerShell 7.x. Check with PSScriptAnalyzer using `PSScriptAnalyzerSettings.psd1` (the VS Code workspace settings in `.vscode/` use it automatically and enable `git.alwaysSignOff`).
 - Follow the naming scheme: `Soa*` = toolkit / infrastructure / Microsoft feature, `CloudUser*` = target state of the users; approved PowerShell verbs.
 - Put shared logic into `SoaToolkit.psm1`.
@@ -60,5 +60,5 @@ AI tools may be used. The person who signs off the commit:
 - has run the checks;
 - is responsible for the change (DCO).
 
-Statements labelled *Observed* require real lab data ([docs/EVIDENCE.md](docs/EVIDENCE.md)). AI-generated "results" are not evidence. If an AI tool contributed substantially, say so in the pull request and optionally add a trailer such as `Assisted-by: <tool>` to the commit.
+Statements labelled *Observed* require real lab data ([docs/EVIDENCE.md](docs/EVIDENCE.md)). AI-generated "results" are not evidence. If an AI tool contributed substantially, say so in the pull request and optionally add the trailer `Assisted-by: <tool> (<vendor>)` to the commit, for example `Assisted-by: Claude (Anthropic)`.
 - Social preview and README banner: edit `.github/assets/social-preview.html` and render it at exactly 1280×640 and 1820×640 (PNG; JPEG XL optional). Upload the 1280×640 PNG under *Settings → General → Social preview* (GitHub accepts PNG, JPG or GIF under 1 MB). The folder is excluded from source archives (`export-ignore`).
