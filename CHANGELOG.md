@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.6 – 2026-10-21
+
+Makes the `-WhatIf` dry run of `Install-SoaToolkit.ps1` work end to end (found in the lab dry run of 2.0.5) and adds a static check against this class of defect.
+
+### Fixed
+
+- **`-WhatIf` skipped the toolkit's own scratch files** (affected: 2.0.4 and 2.0.5; older versions not checked). Inside a script, `$WhatIfPreference` does reach the built-in cmdlets, so the dry run also skipped work it needs itself:
+  - `DeployTasks` staged no file in `%TEMP%`, and `Get-FileHash` failed with "Cannot find path ...\soa_stage_*\SoaToolkit.psm1"; the file hashes and `deployment.json` of the dry run were empty. With `SigningCertThumbprint` set, the step would have stopped with "Signing ... failed" (no signature object).
+  - `KirGpo`: in PowerShell 7, `Start-Process` honours `-WhatIf`, so `msiexec /a` did not run and the step stopped with "msiexec /a failed with exit code". In Windows PowerShell 5.1 (no `-WhatIf` on `Start-Process`) the extraction ran, but its folder `%TEMP%\soa_kir_*` was not removed - in a real run neither, when the package was skipped (pre-existing KIR GPO).
+  - Now staging and MSI extraction run in the dry run as well (`-WhatIf:$false` on the scratch paths; msiexec in the new module function `Expand-SoaMsi`), and both scratch folders are removed in a `finally` block. A dry run does not sign the staged scripts (no key use, no timestamp request) and reports SKIP instead.
+  - Left-over folders `soa_stage_*` / `soa_kir_*` in `%TEMP%` of the admin account can be deleted.
+- **Dry runs had no START line in the run log** (affected: 2.0.2-2.0.5, the versions with run markers). `Write-InstallLog` / `Write-UninstallLog` use `Add-Content`, which `-WhatIf` skipped; only the step lines written by the module reached the log, without their run. `Export-SoaReport.ps1` therefore found no dry run, and L2 stayed OPEN ("no -WhatIf run of Install -Step All found"). The run log is now written in dry runs as well; repeat the dry run with 2.0.6 for L2.
+- **Verify and Conform wrote no report in a dry run** (affected: 2.0.4 and 2.0.5; older versions not checked). A script called with `&` inherits `$WhatIfPreference`, so the read-only `Watch-CloudUserConformance.ps1` (Verify) and `Invoke-CloudUserConformance.ps1 -Mode Analyze` (Conform) skipped their report files, and Verify printed the path of a report that did not exist. Both now run through `Invoke-ReadOnlyScript` and write their reports; they change nothing in the domain either way.
+
+### New
+
+- **`tools/Test-SoaScriptScope.ps1`, third check:** in a script that supports `-WhatIf`, writes to scratch and run-log paths (variables from `$env:TEMP`, `GetTempPath()`, `GetTempFileName()` or a `*.log` name) pass `-WhatIf:$false`, and there is no `Start-Process` (it honours `-WhatIf` in PowerShell 7 only; Windows PowerShell 5.1 has no such parameter). Run against 2.0.5, it reports the defects above. Three new unit tests.
+- `AGENTS.md` (scope pitfalls) and `docs/VALIDATION.md` (L2: what a dry run writes) describe the rule.
+
 ## 2.0.5 – 2026-10-21
 
 Fixes two defects found in the first lab run of `Install-SoaToolkit.ps1 -Step All` and one in the monitor, adds a static check against this class of defect, and tightens the ownership of the diagnostics GPO.

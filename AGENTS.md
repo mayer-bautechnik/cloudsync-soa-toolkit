@@ -44,7 +44,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
    - Every source file carries the MPL-2.0 header.
    - Naming: `Soa*` = toolkit / infrastructure, `CloudUser*` = target state of users, approved verbs only.
    - Shared logic goes into `SoaToolkit.psm1`.
-   - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module.
+   - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module. Conversely, inside the script `-WhatIf` does reach the built-in cmdlets: local scratch work the dry run needs itself (staging in `%TEMP%`, the run log) passes `-WhatIf:$false -Confirm:$false`, `Start-Process` belongs in a module function (PowerShell 7 honours `-WhatIf` there, 5.1 has no such parameter), and read-only child scripts run through `Invoke-ReadOnlyScript`.
 8. **One version.** `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `.NOTES` line of every script, the configuration header, the README status line and CHANGELOG must match. `tools/Test-SoaRepoHygiene.ps1` checks this (H6).
 
 ## How to check a change

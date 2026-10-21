@@ -61,7 +61,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -107,12 +107,19 @@ $manifest = Get-SoaManifest -Config $cfg
 $roles    = @(Get-SoaHostRoles -Config $cfg -Context $ctx)
 $ver      = Get-SoaVersion
 $installLog = Join-Path (Join-Path $cfg.ReportPath 'State') ('install_{0:yyyyMMdd}.log' -f (Get-Date))
-New-Item -Path (Split-Path $installLog -Parent) -ItemType Directory -Force | Out-Null
+# The run log is written also during -WhatIf: Export-SoaReport.ps1 evaluates dry runs (L2) by their START line.
+New-Item -Path (Split-Path $installLog -Parent) -ItemType Directory -Force -WhatIf:$false -Confirm:$false | Out-Null
 
 function Write-InstallLog([string]$Text) {
-    Add-Content -Path $installLog -Value ('{0:s} {1} {2}' -f (Get-Date), [Security.Principal.WindowsIdentity]::GetCurrent().Name, $Text) -Encoding UTF8
+    Add-Content -Path $installLog -Value ('{0:s} {1} {2}' -f (Get-Date), [Security.Principal.WindowsIdentity]::GetCurrent().Name, $Text) -Encoding UTF8 -WhatIf:$false -Confirm:$false
 }
 function Save-Manifest { if (-not $WhatIfPreference) { Save-SoaManifest -Config $cfg -Manifest $manifest -Context $ctx } }
+# Runs a read-only toolkit script (conformance analysis, monitor). A script called with & inherits $WhatIfPreference,
+# which during a dry run would suppress only its report files; it changes nothing in the domain either way.
+function Invoke-ReadOnlyScript([string]$Path, [hashtable]$Parameters) {
+    $WhatIfPreference = $false
+    & $Path @Parameters
+}
 function Get-ToolkitGroup([string]$Name) { Get-ADGroup -Filter "Name -eq '$Name'" -Server $pdc -Properties description, info, member }
 # A step needs an object that an earlier step creates. In a -WhatIf dry run (e.g. -Step All -WhatIf on a fresh domain)
 # that object does not exist yet: report it and skip the rest of the step (returns $false). In a real run: stop.
@@ -462,86 +469,91 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 Write-Host ''
                 Write-Host "Package $($pkg.Label): $($pkg.Msi)" -ForegroundColor Cyan
                 if (-not (Test-Path -LiteralPath $pkg.Msi)) { throw "MSI not found: $($pkg.Msi)" }
+                # Administrative extraction of the MSI into %TEMP% (read-only for the domain): runs also during -WhatIf, so the
+                # dry run shows the policy and its feature IDs. Removed in every case, also after 'continue' (finally).
                 $tmp = Join-Path $env:TEMP ('soa_kir_{0}_{1}' -f $pkg.Label, [guid]::NewGuid().ToString('N').Substring(0, 8))
-                New-Item -Path $tmp -ItemType Directory -Force | Out-Null
-                $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/a', "`"$((Resolve-Path -LiteralPath $pkg.Msi).Path)`"", '/qn', "TARGETDIR=`"$tmp`"") -Wait -PassThru
-                if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit code $($p.ExitCode) for $($pkg.Msi)." }
-                $admxFiles = @(Get-ChildItem -LiteralPath $tmp -Recurse -Filter '*.admx' -File)
-                if (-not $admxFiles.Count) { throw "No ADMX found in $($pkg.Msi) (extracted to $tmp)." }
+                New-Item -Path $tmp -ItemType Directory -Force -WhatIf:$false -Confirm:$false | Out-Null
+                try {
+                    $exit = Expand-SoaMsi -Path $pkg.Msi -Destination $tmp
+                    if ($exit -ne 0) { throw "msiexec /a failed with exit code $exit for $($pkg.Msi)." }
+                    $admxFiles = @(Get-ChildItem -LiteralPath $tmp -Recurse -Filter '*.admx' -File)
+                    if (-not $admxFiles.Count) { throw "No ADMX found in $($pkg.Msi) (extracted to $tmp)." }
 
-                $defs = @(foreach ($a in $admxFiles) { Get-SoaKirDefinition -AdmxPath $a.FullName })
-                if ($KirPolicyName) { $defs = @($defs | Where-Object { $_.PolicyName -eq $KirPolicyName -or $_.DisplayName -eq $KirPolicyName }) }
-                if (-not $defs.Count) { throw "No policy writing FeatureManagement overrides found in $($pkg.Msi)." }
-                if ($defs.Count -gt 1) { throw ("Several KIR policies found - pass -KirPolicyName: {0}" -f (($defs | ForEach-Object { "$($_.PolicyName) ('$($_.DisplayName)')" }) -join '; ')) }
-                $def = $defs[0]
-                Write-Host ("  policy '{0}' ({1}) - feature IDs: {2}" -f $def.DisplayName, $def.AdmxFile, (($def.Items | ForEach-Object { "$($_.FeatureId)=$($_.Enabled)" }) -join ', '))
+                    $defs = @(foreach ($a in $admxFiles) { Get-SoaKirDefinition -AdmxPath $a.FullName })
+                    if ($KirPolicyName) { $defs = @($defs | Where-Object { $_.PolicyName -eq $KirPolicyName -or $_.DisplayName -eq $KirPolicyName }) }
+                    if (-not $defs.Count) { throw "No policy writing FeatureManagement overrides found in $($pkg.Msi)." }
+                    if ($defs.Count -gt 1) { throw ("Several KIR policies found - pass -KirPolicyName: {0}" -f (($defs | ForEach-Object { "$($_.PolicyName) ('$($_.DisplayName)')" }) -join '; ')) }
+                    $def = $defs[0]
+                    Write-Host ("  policy '{0}' ({1}) - feature IDs: {2}" -f $def.DisplayName, $def.AdmxFile, (($def.Items | ForEach-Object { "$($_.FeatureId)=$($_.Enabled)" }) -join ', '))
 
-                # 1. ADMX/ADML to the policy store
-                $copied = @()
-                $srcDir = Split-Path -Path ($admxFiles | Where-Object { $_.Name -eq $def.AdmxFile } | Select-Object -First 1).FullName -Parent
-                $files = @(Get-ChildItem -LiteralPath $srcDir -Filter ([IO.Path]::ChangeExtension($def.AdmxFile, '.admx')) -File) +
-                         @(Get-ChildItem -LiteralPath $srcDir -Recurse -Filter ([IO.Path]::ChangeExtension($def.AdmxFile, '.adml')) -File)
-                foreach ($f in $files) {
-                    $rel  = $f.FullName.Substring($srcDir.Length).TrimStart('\')
-                    $dest = Join-Path $store $rel
-                    $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
-                    if (Test-Path -LiteralPath $dest) {
-                        if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -eq $hash) { Write-SoaLine SAME "$rel (identical)"; continue }
-                        if (-not $Force) { Write-SoaLine WARN "$rel exists with different content - not overwritten (use -Force)"; continue }
+                    # 1. ADMX/ADML to the policy store
+                    $copied = @()
+                    $srcDir = Split-Path -Path ($admxFiles | Where-Object { $_.Name -eq $def.AdmxFile } | Select-Object -First 1).FullName -Parent
+                    $files = @(Get-ChildItem -LiteralPath $srcDir -Filter ([IO.Path]::ChangeExtension($def.AdmxFile, '.admx')) -File) +
+                             @(Get-ChildItem -LiteralPath $srcDir -Recurse -Filter ([IO.Path]::ChangeExtension($def.AdmxFile, '.adml')) -File)
+                    foreach ($f in $files) {
+                        $rel  = $f.FullName.Substring($srcDir.Length).TrimStart('\')
+                        $dest = Join-Path $store $rel
+                        $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+                        if (Test-Path -LiteralPath $dest) {
+                            if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -eq $hash) { Write-SoaLine SAME "$rel (identical)"; continue }
+                            if (-not $Force) { Write-SoaLine WARN "$rel exists with different content - not overwritten (use -Force)"; continue }
+                        }
+                        if ($Cmdlet.ShouldProcess($dest, 'Copy policy definition')) {
+                            New-Item -Path (Split-Path $dest -Parent) -ItemType Directory -Force | Out-Null
+                            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
+                            Write-SoaLine ADD "$rel -> $store"
+                            $copied += [pscustomobject]@{ Path = $dest; Sha256 = $hash }
+                        }
                     }
-                    if ($Cmdlet.ShouldProcess($dest, 'Copy policy definition')) {
-                        New-Item -Path (Split-Path $dest -Parent) -ItemType Directory -Force | Out-Null
-                        Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
-                        Write-SoaLine ADD "$rel -> $store"
-                        $copied += [pscustomobject]@{ Path = $dest; Sha256 = $hash }
-                    }
-                }
-                if ($copied.Count) { Set-SoaManifestEntry -Manifest $manifest -Kind 'AdmxFiles' -Key $pkg.Label -Action Created -Data @{ Files = $copied } }
+                    if ($copied.Count) { Set-SoaManifestEntry -Manifest $manifest -Kind 'AdmxFiles' -Key $pkg.Label -Action Created -Data @{ Files = $copied } }
 
-                # 2. Pre-existing KIR GPO with these feature IDs?
-                $ids = @($def.Items | ForEach-Object { $_.FeatureId })
-                $gpoName = '{0} ({1})' -f $cfg.KirGpoNamePrefix, $pkg.Label
-                $preExisting = $null
-                foreach ($l in $dcOuGpos) {
-                    $gg = Get-GPO -Guid $l.GpoId -Domain $ctx.DnsRoot -Server $pdc
-                    if ($gg.DisplayName -eq $gpoName) { continue }
-                    $vals = @()
-                    foreach ($k in @($def.Items | ForEach-Object { $_.Key } | Select-Object -Unique)) {
-                        try { $vals += @(Get-GPRegistryValue -Guid $l.GpoId -Domain $ctx.DnsRoot -Server $pdc -Key "HKLM\$k" -ErrorAction Stop) } catch { }
+                    # 2. Pre-existing KIR GPO with these feature IDs?
+                    $ids = @($def.Items | ForEach-Object { $_.FeatureId })
+                    $gpoName = '{0} ({1})' -f $cfg.KirGpoNamePrefix, $pkg.Label
+                    $preExisting = $null
+                    foreach ($l in $dcOuGpos) {
+                        $gg = Get-GPO -Guid $l.GpoId -Domain $ctx.DnsRoot -Server $pdc
+                        if ($gg.DisplayName -eq $gpoName) { continue }
+                        $vals = @()
+                        foreach ($k in @($def.Items | ForEach-Object { $_.Key } | Select-Object -Unique)) {
+                            try { $vals += @(Get-GPRegistryValue -Guid $l.GpoId -Domain $ctx.DnsRoot -Server $pdc -Key "HKLM\$k" -ErrorAction Stop) } catch { }
+                        }
+                        if (@($vals | Where-Object { $ids -contains $_.ValueName }).Count) { $preExisting = $gg; break }
                     }
-                    if (@($vals | Where-Object { $ids -contains $_.ValueName }).Count) { $preExisting = $gg; break }
-                }
-                if ($preExisting -and -not $Force) {
-                    Write-SoaLine SAME "pre-existing GPO '$($preExisting.DisplayName)' already sets these feature IDs - not creating a second one (use -Force to create the toolkit GPO anyway)"
-                    Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key "Kir$($pkg.Label)" -Action PreExisting -Data @{ Id = "$($preExisting.Id)"; Name = $preExisting.DisplayName; FeatureIds = $ids; Build = $pkg.Build }
+                    if ($preExisting -and -not $Force) {
+                        Write-SoaLine SAME "pre-existing GPO '$($preExisting.DisplayName)' already sets these feature IDs - not creating a second one (use -Force to create the toolkit GPO anyway)"
+                        Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key "Kir$($pkg.Label)" -Action PreExisting -Data @{ Id = "$($preExisting.Id)"; Name = $preExisting.DisplayName; FeatureIds = $ids; Build = $pkg.Build }
+                        Save-Manifest
+                        continue
+                    }
+
+                    # 3. GPO with the registry values of the policy (applied without the ADMX; the ADMX only serves editing/reporting)
+                    $res = New-SoaGpo -Name $gpoName -Config $cfg -Context $ctx -Purpose "Enables AD object enforcement on $($pkg.Label) domain controllers (Microsoft Group Policy package, KIR model). Removing it disables the feature after a DC restart" -WhatIf:$WhatIfPreference
+                    if (-not $res) { continue }
+                    $gpo = $res.Gpo
+                    foreach ($it in $def.Items) {
+                        if ($Cmdlet.ShouldProcess($gpoName, "HKLM\$($it.Key)\$($it.FeatureId) = $($it.Enabled)")) {
+                            Set-GPRegistryValue -Guid $gpo.Id -Domain $ctx.DnsRoot -Server $pdc -Key "HKLM\$($it.Key)" -ValueName $it.FeatureId -Type DWord -Value ([int]$it.Enabled) | Out-Null
+                            Write-SoaLine ADD "HKLM\$($it.Key)\$($it.FeatureId) = $($it.Enabled)"
+                        }
+                    }
+                    $wf = New-SoaWmiFilter -Name ("SOA Toolkit - OS build {0} ({1})" -f $pkg.Build, $pkg.Label) -Query ('SELECT * FROM Win32_OperatingSystem WHERE BuildNumber = "{0}"' -f $pkg.Build) -Config $cfg -Context $ctx `
+                                           -Description (Get-SoaMarker -Config $cfg -Short -Purpose "Matches $($pkg.Label) (build $($pkg.Build))") -WhatIf:$WhatIfPreference
+                    if ($wf -and -not $WhatIfPreference) {
+                        Set-SoaGpoWmiFilter -GpoId $gpo.Id -FilterId $wf.Id -Context $ctx
+                        Write-SoaLine ADD "WMI filter $($wf.Id) assigned"
+                        Set-SoaManifestEntry -Manifest $manifest -Kind 'WmiFilter' -Key $pkg.Label -Action $(if ($wf.Created) { 'Created' } else { 'PreExisting' }) -Data @{ Id = $wf.Id; Dn = $wf.Dn }
+                    }
+                    $order2 = @((Get-GPInheritance -Target $ctx.DcOu -Domain $ctx.DnsRoot -Server $pdc).GpoLinks).Count + 1
+                    $state = Get-SoaGpoLinkState -Id $gpo.Id -Target $ctx.DcOu -Context $ctx
+                    if (-not $state.Linked) { Set-SoaGpoLink -Id $gpo.Id -Target $ctx.DcOu -Context $ctx -Order $order2 -WhatIf:$WhatIfPreference } else { Write-SoaLine SAME "linked to $($ctx.DcOu)" }
+                    Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key "Kir$($pkg.Label)" -Action $(if ($res.Created -or (Test-SoaMarker $gpo.Description)) { 'Created' } else { 'PreExisting' }) `
+                        -Data @{ Id = "$($gpo.Id)"; Name = $gpoName; FeatureIds = $ids; Build = $pkg.Build; Policy = $def.DisplayName; Items = @($def.Items) }
                     Save-Manifest
-                    continue
+                } finally {
+                    Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false -Confirm:$false
                 }
-
-                # 3. GPO with the registry values of the policy (applied without the ADMX; the ADMX only serves editing/reporting)
-                $res = New-SoaGpo -Name $gpoName -Config $cfg -Context $ctx -Purpose "Enables AD object enforcement on $($pkg.Label) domain controllers (Microsoft Group Policy package, KIR model). Removing it disables the feature after a DC restart" -WhatIf:$WhatIfPreference
-                if (-not $res) { continue }
-                $gpo = $res.Gpo
-                foreach ($it in $def.Items) {
-                    if ($Cmdlet.ShouldProcess($gpoName, "HKLM\$($it.Key)\$($it.FeatureId) = $($it.Enabled)")) {
-                        Set-GPRegistryValue -Guid $gpo.Id -Domain $ctx.DnsRoot -Server $pdc -Key "HKLM\$($it.Key)" -ValueName $it.FeatureId -Type DWord -Value ([int]$it.Enabled) | Out-Null
-                        Write-SoaLine ADD "HKLM\$($it.Key)\$($it.FeatureId) = $($it.Enabled)"
-                    }
-                }
-                $wf = New-SoaWmiFilter -Name ("SOA Toolkit - OS build {0} ({1})" -f $pkg.Build, $pkg.Label) -Query ('SELECT * FROM Win32_OperatingSystem WHERE BuildNumber = "{0}"' -f $pkg.Build) -Config $cfg -Context $ctx `
-                                       -Description (Get-SoaMarker -Config $cfg -Short -Purpose "Matches $($pkg.Label) (build $($pkg.Build))") -WhatIf:$WhatIfPreference
-                if ($wf -and -not $WhatIfPreference) {
-                    Set-SoaGpoWmiFilter -GpoId $gpo.Id -FilterId $wf.Id -Context $ctx
-                    Write-SoaLine ADD "WMI filter $($wf.Id) assigned"
-                    Set-SoaManifestEntry -Manifest $manifest -Kind 'WmiFilter' -Key $pkg.Label -Action $(if ($wf.Created) { 'Created' } else { 'PreExisting' }) -Data @{ Id = $wf.Id; Dn = $wf.Dn }
-                }
-                $order2 = @((Get-GPInheritance -Target $ctx.DcOu -Domain $ctx.DnsRoot -Server $pdc).GpoLinks).Count + 1
-                $state = Get-SoaGpoLinkState -Id $gpo.Id -Target $ctx.DcOu -Context $ctx
-                if (-not $state.Linked) { Set-SoaGpoLink -Id $gpo.Id -Target $ctx.DcOu -Context $ctx -Order $order2 -WhatIf:$WhatIfPreference } else { Write-SoaLine SAME "linked to $($ctx.DcOu)" }
-                Set-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' -Key "Kir$($pkg.Label)" -Action $(if ($res.Created -or (Test-SoaMarker $gpo.Description)) { 'Created' } else { 'PreExisting' }) `
-                    -Data @{ Id = "$($gpo.Id)"; Name = $gpoName; FeatureIds = $ids; Build = $pkg.Build; Policy = $def.DisplayName; Items = @($def.Items) }
-                Save-Manifest
-                Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
             }
             Write-Host ''
             Write-Host 'NEXT: wait for SYSVOL replication, run gpupdate /target:computer /force on every writable DC and restart the DCs' -ForegroundColor Cyan
@@ -940,106 +952,115 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             if (-not $agents.Count) { throw 'No agent gMSA found - the event triggers need the agent SID(s).' }
             $eventSubs = Get-SoaEventSubscription -AgentSids @($agents | ForEach-Object { $_.Sid })
 
-            # Staging (+ optional code signing)
+            # Staging (+ optional code signing). Local scratch work in %TEMP%, not a change to any host: it also runs during
+            # -WhatIf (hashes and deployment.json are part of the dry run) and is removed in every case (finally).
             $files = 'SoaToolkit.psm1', 'SoaToolkit.config.psd1', 'Invoke-CloudUserConformance.ps1', 'Watch-CloudUserConformance.ps1'
             $stage = Join-Path $env:TEMP ('soa_stage_{0}' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
-            New-Item -Path $stage -ItemType Directory -Force | Out-Null
-            foreach ($f in $files) {
-                $src = if ($f -eq 'SoaToolkit.config.psd1') { $cfg.ConfigPath } else { Join-Path $ScriptRoot $f }
-                if (-not (Test-Path -LiteralPath $src)) { throw "File not found: $src" }
-                Copy-Item -LiteralPath $src -Destination (Join-Path $stage $f) -Force
-            }
-            $execPolicy = 'Bypass'
-            if ($cfg.SigningCertThumbprint) {
-                $cert = @(Get-ChildItem -Path Cert:\CurrentUser\My, Cert:\LocalMachine\My -CodeSigningCert -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $cfg.SigningCertThumbprint }) | Select-Object -First 1
-                if (-not $cert) { throw "Code-signing certificate $($cfg.SigningCertThumbprint) not found (CurrentUser\My / LocalMachine\My, EKU Code Signing)." }
+            New-Item -Path $stage -ItemType Directory -Force -WhatIf:$false -Confirm:$false | Out-Null
+            try {
                 foreach ($f in $files) {
-                    $sp = @{ FilePath = (Join-Path $stage $f); Certificate = $cert; HashAlgorithm = 'SHA256' }
-                    if ($cfg.PSObject.Properties.Name -contains 'SigningTimestampUrl' -and $cfg.SigningTimestampUrl) { $sp.TimestampServer = $cfg.SigningTimestampUrl }
-                    $sig = Set-AuthenticodeSignature @sp
-                    if ($sig.Status -ne 'Valid') { throw "Signing $f failed: $($sig.Status) $($sig.StatusMessage)" }
+                    $src = if ($f -eq 'SoaToolkit.config.psd1') { $cfg.ConfigPath } else { Join-Path $ScriptRoot $f }
+                    if (-not (Test-Path -LiteralPath $src)) { throw "File not found: $src" }
+                    Copy-Item -LiteralPath $src -Destination (Join-Path $stage $f) -Force -WhatIf:$false -Confirm:$false
                 }
-                $execPolicy = 'AllSigned'
-                Write-SoaLine ADD "scripts signed with $($cert.Subject) - tasks run with -ExecutionPolicy AllSigned (the certificate must be trusted on every host: Trusted Publishers + root CA)"
-            }
-            $hashes = @{}
-            foreach ($f in $files) { $hashes[$f] = (Get-FileHash -LiteralPath (Join-Path $stage $f) -Algorithm SHA256).Hash }
-            # Values the gMSA cannot determine itself at runtime (no WinRM to other hosts): write scope, agent SIDs, KIR feature IDs
-            $writeScope = @(Get-SoaWriteScope -Config $cfg -Context $ctx -AgentGmsa $agents)
-            $kir = @(Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' | Where-Object { $_.Key -like 'Kir*' } | ForEach-Object {
-                [pscustomobject]@{ Build = $_.Data.Build; FeatureIds = @($_.Data.FeatureIds); Gpo = $_.Data.Name; Items = @($_.Data.Items) } })
-            $deployInfo = [pscustomobject]@{
-                Product = $ver.Product; Version = $ver.Version; Deployed = (Get-Date).ToString('s'); By = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-                Signed = [bool]$cfg.SigningCertThumbprint; Files = $hashes; WriteScope = $writeScope
-                AgentSids = @($agents | ForEach-Object { $_.Sid }); AgentGmsas = @($agents | ForEach-Object { $_.Name }); Kir = $kir
-                Hosts = @($roles | ForEach-Object { [pscustomobject]@{ Host = $_.Host; IsDc = $_.IsDc; IsAgent = $_.IsAgent } })
-            }
-            Write-Host ("Write scope: {0}" -f ($writeScope -join '; '))
-            $deployInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stage 'deployment.json') -Encoding UTF8
-            $manifestCopy = Get-SoaManifestPath -Config $cfg
-
-            $agentCount = [Math]::Max(1, @($roles | Where-Object { $_.IsAgent }).Count)
-            $hostIdx = 0
-            foreach ($r in $roles) {
-                Write-Host ''
-                Write-Host ("{0}  (DC={1}, Agent={2})" -f $r.Host, $r.IsDc, $r.IsAgent) -ForegroundColor Cyan
-                if (-not $Cmdlet.ShouldProcess($r.Host, 'Deploy scripts, lock folders, create event log, register tasks')) { $hostIdx++; continue }
-                $isLocal = ($r.Host -eq (Get-SoaLocalFqdn)) -or ((Get-SoaShortName $r.Host) -ieq $env:COMPUTERNAME)
-                $session = if ($isLocal) { $null } else { New-PSSession -ComputerName $r.Host }
-                try {
-                    $prep = {
-                        param($InstallPath, $DataPath, $GmsaSid, $LogName, $MaxBytes, $AllowWef)
-                        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'RSAT AD PowerShell missing (Install-WindowsFeature RSAT-AD-PowerShell).' }
-                        foreach ($p in @($InstallPath, $DataPath, (Join-Path $DataPath 'State'))) { New-Item -Path $p -ItemType Directory -Force | Out-Null }
-                        & icacls.exe $InstallPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)RX' -f $GmsaSid) | Out-Null
-                        & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)M' -f $GmsaSid) | Out-Null
-                        if (-not [Diagnostics.EventLog]::SourceExists($LogName)) { [Diagnostics.EventLog]::CreateEventSource($LogName, $LogName) }
-                        # Channel access: SYSTEM full, Administrators read/write/clear, gMSA + batch logons read/write, Event Log Readers read
-                        # (+ NETWORK SERVICE read for Windows Event Forwarding if EventLogAllowWef)
-                        $sddl = 'O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)(A;;0x3;;;{0})(A;;0x3;;;S-1-5-3)(A;;0x1;;;S-1-5-32-573)' -f $GmsaSid
-                        if ($AllowWef) { $sddl += '(A;;0x1;;;NS)' }
-                        & wevtutil.exe sl $LogName "/ca:$sddl" | Out-Null
-                        # Size and retention: overwrite as needed. A classic log is created with 512 KB and 'overwrite older'
-                        # - when full, new events (heartbeats, failures) would be dropped. The log is also the WEF buffer.
-                        & wevtutil.exe sl $LogName "/ms:$MaxBytes" '/rt:false' '/ab:false' | Out-Null
-                        "folders locked (Administrators/SYSTEM full, gMSA read+execute on scripts, modify on data); event log ready (gMSA may write, $([int64]$MaxBytes / 1MB) MB, overwrite as needed$(if ($AllowWef) { ', readable by NETWORK SERVICE for WEF' }))"
+                $execPolicy = 'Bypass'
+                if ($cfg.SigningCertThumbprint) {
+                    $cert = @(Get-ChildItem -Path Cert:\CurrentUser\My, Cert:\LocalMachine\My -CodeSigningCert -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $cfg.SigningCertThumbprint }) | Select-Object -First 1
+                    if (-not $cert) { throw "Code-signing certificate $($cfg.SigningCertThumbprint) not found (CurrentUser\My / LocalMachine\My, EKU Code Signing)." }
+                    $execPolicy = 'AllSigned'
+                    if ($WhatIfPreference) {
+                        # A dry run does not use the private key (no PIN prompt) and sends no timestamp request.
+                        Write-SoaLine SKIP "(WhatIf) scripts would be signed with $($cert.Subject) - tasks would run with -ExecutionPolicy AllSigned; the hashes of this dry run are those of the unsigned files"
+                    } else {
+                        foreach ($f in $files) {
+                            $sp = @{ FilePath = (Join-Path $stage $f); Certificate = $cert; HashAlgorithm = 'SHA256'; Confirm = $false }
+                            if ($cfg.PSObject.Properties.Name -contains 'SigningTimestampUrl' -and $cfg.SigningTimestampUrl) { $sp.TimestampServer = $cfg.SigningTimestampUrl }
+                            $sig = Set-AuthenticodeSignature @sp
+                            if ($sig.Status -ne 'Valid') { throw "Signing $f failed: $($sig.Status) $($sig.StatusMessage)" }
+                        }
+                        Write-SoaLine ADD "scripts signed with $($cert.Subject) - tasks run with -ExecutionPolicy AllSigned (the certificate must be trusted on every host: Trusted Publishers + root CA)"
                     }
-                    $prepArgs = @($cfg.ScriptInstallPath, $cfg.DataPath, $gmsa.SID.Value, $cfg.EventLogName, ([int64]$cfg.EventLogMaxSizeMB * 1MB), [bool]$cfg.EventLogAllowWef)
-                    $msg = if ($session) { Invoke-Command -Session $session -ScriptBlock $prep -ArgumentList $prepArgs } else { & $prep @prepArgs }
-                    Write-SoaLine ADD $msg
-                    foreach ($f in @($files) + 'deployment.json') {
-                        if ($session) { Copy-Item -LiteralPath (Join-Path $stage $f) -Destination (Join-Path $cfg.ScriptInstallPath $f) -ToSession $session -Force }
-                        else { Copy-Item -LiteralPath (Join-Path $stage $f) -Destination (Join-Path $cfg.ScriptInstallPath $f) -Force }
-                    }
-                    if (Test-Path -LiteralPath $manifestCopy) {
-                        $mDest = Join-Path (Join-Path $cfg.DataPath 'State') 'manifest.json'
-                        if ($session) { Copy-Item -LiteralPath $manifestCopy -Destination $mDest -ToSession $session -Force } else { Copy-Item -LiteralPath $manifestCopy -Destination $mDest -Force }
-                    }
-                    Write-SoaLine ADD ("{0} file(s) copied to {1}" -f ($files.Count + 1), $cfg.ScriptInstallPath)
-
-                    $agentIdx = if ($r.IsAgent) { $r.AgentIndex } else { 0 }
-                    $P = @{
-                        UserId = ('{0}\{1}$' -f $ctx.NetBios, $cfg.GmsaName); TaskFolder = $cfg.TaskFolder; InstallPath = $cfg.ScriptInstallPath
-                        IsDc = $r.IsDc; IsAgent = $r.IsAgent; ExecutionPolicy = $execPolicy; EventLog = $cfg.EventLogName
-                        SubscriptionUserCreated = $eventSubs.UserCreated; SubscriptionSoaWritten = $eventSubs.SoaWritten; DelaySeconds = [int]$cfg.EventTriggerDelaySeconds
-                        ReconcileMinutes = [int]$cfg.ReconcileMinutes; ReconcileOffset = [int]([Math]::Floor([Math]::Max(5, [int]$cfg.ReconcileMinutes) * $agentIdx / $agentCount))
-                        MonitorMinutes = [int]$cfg.MonitorMinutes; MonitorOffset = (($hostIdx * 7) % [Math]::Max(10, [int]$cfg.MonitorMinutes))
-                        Marker = (Get-SoaMarker -Config $cfg -Short)
-                    }
-                    $out = if ($session) { Invoke-Command -Session $session -ScriptBlock $registerTasksBlock -ArgumentList $P } else { & $registerTasksBlock $P }
-                    foreach ($o in @($out)) { Write-SoaLine ADD $o }
-                    Set-SoaManifestEntry -Manifest $manifest -Kind 'HostDeployment' -Key $r.Host -Action Created -Data @{
-                        Host = $r.Host; IsDc = $r.IsDc; IsAgent = $r.IsAgent; InstallPath = $cfg.ScriptInstallPath; DataPath = $cfg.DataPath
-                        TaskFolder = $cfg.TaskFolder; EventLog = $cfg.EventLogName; Files = $hashes; Signed = [bool]$cfg.SigningCertThumbprint
-                    }
-                } catch {
-                    Write-SoaLine FAIL "$($r.Host): $($_.Exception.Message)"
-                } finally {
-                    if ($session) { Remove-PSSession -Session $session }
                 }
-                $hostIdx++
+                $hashes = @{}
+                foreach ($f in $files) { $hashes[$f] = (Get-FileHash -LiteralPath (Join-Path $stage $f) -Algorithm SHA256).Hash }
+                # Values the gMSA cannot determine itself at runtime (no WinRM to other hosts): write scope, agent SIDs, KIR feature IDs
+                $writeScope = @(Get-SoaWriteScope -Config $cfg -Context $ctx -AgentGmsa $agents)
+                $kir = @(Get-SoaManifestEntry -Manifest $manifest -Kind 'Gpo' | Where-Object { $_.Key -like 'Kir*' } | ForEach-Object {
+                    [pscustomobject]@{ Build = $_.Data.Build; FeatureIds = @($_.Data.FeatureIds); Gpo = $_.Data.Name; Items = @($_.Data.Items) } })
+                $deployInfo = [pscustomobject]@{
+                    Product = $ver.Product; Version = $ver.Version; Deployed = (Get-Date).ToString('s'); By = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+                    Signed = [bool]$cfg.SigningCertThumbprint; Files = $hashes; WriteScope = $writeScope
+                    AgentSids = @($agents | ForEach-Object { $_.Sid }); AgentGmsas = @($agents | ForEach-Object { $_.Name }); Kir = $kir
+                    Hosts = @($roles | ForEach-Object { [pscustomobject]@{ Host = $_.Host; IsDc = $_.IsDc; IsAgent = $_.IsAgent } })
+                }
+                Write-Host ("Write scope: {0}" -f ($writeScope -join '; '))
+                $deployInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stage 'deployment.json') -Encoding UTF8 -WhatIf:$false -Confirm:$false
+                $manifestCopy = Get-SoaManifestPath -Config $cfg
+
+                $agentCount = [Math]::Max(1, @($roles | Where-Object { $_.IsAgent }).Count)
+                $hostIdx = 0
+                foreach ($r in $roles) {
+                    Write-Host ''
+                    Write-Host ("{0}  (DC={1}, Agent={2})" -f $r.Host, $r.IsDc, $r.IsAgent) -ForegroundColor Cyan
+                    if (-not $Cmdlet.ShouldProcess($r.Host, 'Deploy scripts, lock folders, create event log, register tasks')) { $hostIdx++; continue }
+                    $isLocal = ($r.Host -eq (Get-SoaLocalFqdn)) -or ((Get-SoaShortName $r.Host) -ieq $env:COMPUTERNAME)
+                    $session = if ($isLocal) { $null } else { New-PSSession -ComputerName $r.Host }
+                    try {
+                        $prep = {
+                            param($InstallPath, $DataPath, $GmsaSid, $LogName, $MaxBytes, $AllowWef)
+                            if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'RSAT AD PowerShell missing (Install-WindowsFeature RSAT-AD-PowerShell).' }
+                            foreach ($p in @($InstallPath, $DataPath, (Join-Path $DataPath 'State'))) { New-Item -Path $p -ItemType Directory -Force | Out-Null }
+                            & icacls.exe $InstallPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)RX' -f $GmsaSid) | Out-Null
+                            & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ('*{0}:(OI)(CI)M' -f $GmsaSid) | Out-Null
+                            if (-not [Diagnostics.EventLog]::SourceExists($LogName)) { [Diagnostics.EventLog]::CreateEventSource($LogName, $LogName) }
+                            # Channel access: SYSTEM full, Administrators read/write/clear, gMSA + batch logons read/write, Event Log Readers read
+                            # (+ NETWORK SERVICE read for Windows Event Forwarding if EventLogAllowWef)
+                            $sddl = 'O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)(A;;0x3;;;{0})(A;;0x3;;;S-1-5-3)(A;;0x1;;;S-1-5-32-573)' -f $GmsaSid
+                            if ($AllowWef) { $sddl += '(A;;0x1;;;NS)' }
+                            & wevtutil.exe sl $LogName "/ca:$sddl" | Out-Null
+                            # Size and retention: overwrite as needed. A classic log is created with 512 KB and 'overwrite older'
+                            # - when full, new events (heartbeats, failures) would be dropped. The log is also the WEF buffer.
+                            & wevtutil.exe sl $LogName "/ms:$MaxBytes" '/rt:false' '/ab:false' | Out-Null
+                            "folders locked (Administrators/SYSTEM full, gMSA read+execute on scripts, modify on data); event log ready (gMSA may write, $([int64]$MaxBytes / 1MB) MB, overwrite as needed$(if ($AllowWef) { ', readable by NETWORK SERVICE for WEF' }))"
+                        }
+                        $prepArgs = @($cfg.ScriptInstallPath, $cfg.DataPath, $gmsa.SID.Value, $cfg.EventLogName, ([int64]$cfg.EventLogMaxSizeMB * 1MB), [bool]$cfg.EventLogAllowWef)
+                        $msg = if ($session) { Invoke-Command -Session $session -ScriptBlock $prep -ArgumentList $prepArgs } else { & $prep @prepArgs }
+                        Write-SoaLine ADD $msg
+                        foreach ($f in @($files) + 'deployment.json') {
+                            if ($session) { Copy-Item -LiteralPath (Join-Path $stage $f) -Destination (Join-Path $cfg.ScriptInstallPath $f) -ToSession $session -Force }
+                            else { Copy-Item -LiteralPath (Join-Path $stage $f) -Destination (Join-Path $cfg.ScriptInstallPath $f) -Force }
+                        }
+                        if (Test-Path -LiteralPath $manifestCopy) {
+                            $mDest = Join-Path (Join-Path $cfg.DataPath 'State') 'manifest.json'
+                            if ($session) { Copy-Item -LiteralPath $manifestCopy -Destination $mDest -ToSession $session -Force } else { Copy-Item -LiteralPath $manifestCopy -Destination $mDest -Force }
+                        }
+                        Write-SoaLine ADD ("{0} file(s) copied to {1}" -f ($files.Count + 1), $cfg.ScriptInstallPath)
+
+                        $agentIdx = if ($r.IsAgent) { $r.AgentIndex } else { 0 }
+                        $P = @{
+                            UserId = ('{0}\{1}$' -f $ctx.NetBios, $cfg.GmsaName); TaskFolder = $cfg.TaskFolder; InstallPath = $cfg.ScriptInstallPath
+                            IsDc = $r.IsDc; IsAgent = $r.IsAgent; ExecutionPolicy = $execPolicy; EventLog = $cfg.EventLogName
+                            SubscriptionUserCreated = $eventSubs.UserCreated; SubscriptionSoaWritten = $eventSubs.SoaWritten; DelaySeconds = [int]$cfg.EventTriggerDelaySeconds
+                            ReconcileMinutes = [int]$cfg.ReconcileMinutes; ReconcileOffset = [int]([Math]::Floor([Math]::Max(5, [int]$cfg.ReconcileMinutes) * $agentIdx / $agentCount))
+                            MonitorMinutes = [int]$cfg.MonitorMinutes; MonitorOffset = (($hostIdx * 7) % [Math]::Max(10, [int]$cfg.MonitorMinutes))
+                            Marker = (Get-SoaMarker -Config $cfg -Short)
+                        }
+                        $out = if ($session) { Invoke-Command -Session $session -ScriptBlock $registerTasksBlock -ArgumentList $P } else { & $registerTasksBlock $P }
+                        foreach ($o in @($out)) { Write-SoaLine ADD $o }
+                        Set-SoaManifestEntry -Manifest $manifest -Kind 'HostDeployment' -Key $r.Host -Action Created -Data @{
+                            Host = $r.Host; IsDc = $r.IsDc; IsAgent = $r.IsAgent; InstallPath = $cfg.ScriptInstallPath; DataPath = $cfg.DataPath
+                            TaskFolder = $cfg.TaskFolder; EventLog = $cfg.EventLogName; Files = $hashes; Signed = [bool]$cfg.SigningCertThumbprint
+                        }
+                    } catch {
+                        Write-SoaLine FAIL "$($r.Host): $($_.Exception.Message)"
+                    } finally {
+                        if ($session) { Remove-PSSession -Session $session }
+                    }
+                    $hostIdx++
+                }
+            } finally {
+                Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false -Confirm:$false
             }
-            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
             Save-Manifest
             Write-Host ''
             Write-Host ("Event subscription (4720): {0}" -f $eventSubs.XPathUserCreated) -ForegroundColor DarkGray
@@ -1050,7 +1071,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
         'Conform' {
             Write-SoaSection 'Conform: initial analysis and target state for all marked cloud users'
             $runner = Join-Path $ScriptRoot 'Invoke-CloudUserConformance.ps1'
-            & $runner -Mode Analyze -ConfigPath $ConfigPath -OutputPath (Join-Path $cfg.ReportPath 'Conformance')
+            Invoke-ReadOnlyScript $runner @{ Mode = 'Analyze'; ConfigPath = $ConfigPath; OutputPath = (Join-Path $cfg.ReportPath 'Conformance') }
             if ($WhatIfPreference) { Write-Host 'WhatIf: analysis only - no changes.' -ForegroundColor Cyan; break }
             if (-not $Cmdlet.ShouldProcess('all in-scope cloud users', 'Apply the target state (one reconcile run as the toolkit gMSA)')) { break }
             $agentHosts = @($roles | Where-Object { $_.IsAgent } | ForEach-Object { $_.Host })
@@ -1210,7 +1231,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 if (@($state | Where-Object { $_.LoadStatus -eq 'ERROR' }).Count) { Write-SoaLine FAIL 'POLICY LOAD ERROR on at least one DC - do NOT switch to Enforced.' }
                 if (@($state | Where-Object { $_.LoadStatus -eq 'NONE' }).Count) { Write-SoaLine INFO 'No 3095 since -Since on some DCs (policy unchanged in that window or diagnostics level 0). Use an earlier -Since.' }
             } else { Write-SoaLine WARN 'CN=Cloud not present yet.' }
-            & (Join-Path $ScriptRoot 'Watch-CloudUserConformance.ps1') -Scope All -ConfigPath $ConfigPath -Html
+            Invoke-ReadOnlyScript (Join-Path $ScriptRoot 'Watch-CloudUserConformance.ps1') @{ Scope = 'All'; ConfigPath = $ConfigPath; Html = $true }
         }
     }
     Write-InstallLog "Step $current finished"

@@ -9,7 +9,7 @@
     domain fabrikam.local). Called by Invoke-SoaUnitTests.ps1; exit code = number of failed assertions.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string] $WorkPath)

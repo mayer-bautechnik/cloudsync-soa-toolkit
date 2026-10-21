@@ -5,8 +5,8 @@
 # Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 <#
 .SYNOPSIS
-    Static checks for two PowerShell scope pitfalls: overwritten script-level values and -WhatIf that does not reach
-    the toolkit module.
+    Static checks for three PowerShell scope pitfalls: overwritten script-level values, -WhatIf that does not reach the
+    toolkit module, and -WhatIf that suppresses local scratch files and run logs.
 
 .DESCRIPTION
     PowerShell variable names are case-insensitive, and switch / foreach / if blocks do not open a new scope. A
@@ -27,12 +27,23 @@
     without passing -WhatIf:$WhatIfPreference makes that function really write. (2.0.4: New-SoaGpo created GPOs during
     Install-SoaToolkit.ps1 -WhatIf.) Reported is every such call in a script that itself supports ShouldProcess.
 
+    Third check, the reverse case: inside the script (and its functions) $WhatIfPreference does reach the built-in
+    cmdlets. Local scratch work that the dry run itself needs - staging in %TEMP%, the run log - is then silently skipped,
+    and the next step reads files that do not exist. (2.0.5 lab run: DeployTasks -WhatIf staged nothing and Get-FileHash
+    failed; the run log had no START line, so Export-SoaReport.ps1 found no dry run for L2.) In a script that supports
+    ShouldProcess, reported is every New-Item, Copy-Item, Set-Content, Add-Content, Out-File, Remove-Item ... whose target
+    path uses a variable assigned from $env:TEMP / GetTempPath() / GetTempFileName() or a '*.log' name, and that does not
+    pass -WhatIf:$false. Also reported is every Start-Process: it honours -WhatIf in PowerShell 7 but has no -WhatIf
+    parameter in Windows PowerShell 5.1, so it belongs in a module function (Expand-SoaMsi). Not covered: splatted
+    targets (@params) and child scripts called with & (they inherit $WhatIfPreference; Install-SoaToolkit.ps1 runs the
+    read-only ones through Invoke-ReadOnlyScript).
+
 .PARAMETER Path
     Folders with scripts (default: ..\scripts and ..\tools). Module functions with SupportsShouldProcess are read from
     every *.psm1 in these folders.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code 0 = clean, 1 = findings.
 #>
 [CmdletBinding()]
@@ -54,6 +65,46 @@ function Test-OwnScope($Ast) {
     }
     $false
 }
+# Script block that runs detached from the script's preference variables (Invoke-Command, stored blocks). Unlike
+# Test-OwnScope, function bodies of the script count as attached: they see the caller's $WhatIfPreference.
+function Test-DetachedBlock($Ast) {
+    $p = $Ast.Parent
+    while ($p) {
+        if ($p -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+            $cmd = $p.Parent
+            $inCaller = ($cmd -is [System.Management.Automation.Language.CommandAst]) -and ($cmd.GetCommandName() -in 'ForEach-Object', 'Where-Object', '%', '?', 'foreach', 'where')
+            if (-not $inCaller) { return $true }
+        }
+        $p = $p.Parent
+    }
+    $false
+}
+# Target path argument(s) of a built-in file cmdlet: named parameter(s), else the positional argument at $Position.
+$scratchTargets = @{
+    'New-Item' = @{ Names = 'Path', 'LiteralPath'; Position = 0 };         'Remove-Item' = @{ Names = 'Path', 'LiteralPath'; Position = 0 }
+    'Set-Content' = @{ Names = 'Path', 'LiteralPath'; Position = 0 };      'Add-Content' = @{ Names = 'Path', 'LiteralPath'; Position = 0 }
+    'Clear-Content' = @{ Names = 'Path', 'LiteralPath'; Position = 0 };    'Rename-Item' = @{ Names = 'Path', 'LiteralPath'; Position = 0 }
+    'Export-Csv' = @{ Names = 'Path', 'LiteralPath'; Position = 0 };       'Export-Clixml' = @{ Names = 'Path', 'LiteralPath'; Position = 0 }
+    'Out-File' = @{ Names = 'FilePath', 'LiteralPath'; Position = 0 };     'Set-AuthenticodeSignature' = @{ Names = 'FilePath', 'LiteralPath'; Position = 0 }
+    'Copy-Item' = @{ Names = @('Destination'); Position = 1 };             'Move-Item' = @{ Names = @('Destination'); Position = 1 }
+    'Compress-Archive' = @{ Names = @('DestinationPath'); Position = 1 }; 'Expand-Archive' = @{ Names = @('DestinationPath'); Position = 1 }
+}
+$switchParams = 'Force', 'Recurse', 'PassThru', 'NoTypeInformation', 'Append', 'NoNewline', 'NoClobber', 'Container', 'Wait', 'WhatIf', 'Confirm',
+                'Verbose', 'Debug', 'Update', 'AsByteStream', 'IncludeTypeInformation', 'UseQuotes', 'NoHeader', 'Stream'
+function Get-TargetArgument($Command, $Spec) {
+    $els = $Command.CommandElements; $named = @(); $positional = @(); $i = 1
+    while ($i -lt $els.Count) {
+        $e = $els[$i]
+        if ($e -is [System.Management.Automation.Language.CommandParameterAst]) {
+            if ($e.Argument) { if ($Spec.Names -contains $e.ParameterName) { $named += $e.Argument } }
+            elseif ($switchParams -notcontains $e.ParameterName -and ($i + 1) -lt $els.Count) { $i++; if ($Spec.Names -contains $e.ParameterName) { $named += $els[$i] } }
+        } else { $positional += $e }
+        $i++
+    }
+    if ($named.Count) { return $named }
+    if ($positional.Count -gt $Spec.Position) { return @($positional[$Spec.Position]) }
+    @()
+}
 function Get-SoaCommandNames($Ast) {
     @($Ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } |
         Where-Object { $_ -match '^(Get|Import|Initialize|Select)-Soa' } | Select-Object -Unique)
@@ -70,6 +121,7 @@ $spFunctions = @(foreach ($p in $Path) {
     }
 }) | Select-Object -Unique
 $whatIfFindings = 0
+$scratchFindings = 0
 foreach ($f in $files) {
     $tokens = $null; $errors = $null
     $root = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)
@@ -103,6 +155,29 @@ foreach ($f in $files) {
             $findings.Add([pscustomobject]@{ File = $f.Name; Line = $c.Extent.StartLineNumber; Text = ('{0} is called without -WhatIf:$WhatIfPreference (preference variables do not reach module functions - it would write during -WhatIf)' -f $c.GetCommandName()) })
         }
     }
+    # Local scratch files / run logs must not depend on -WhatIf; Start-Process belongs in the module
+    if ($scriptSp) {
+        $scratchVars = @($root.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) |
+            Where-Object { -not (Test-DetachedBlock $_) -and $_.Right.Extent.Text -match '(?i)\$env:TEMP\b|GetTemp(Path|FileName)\s*\(|\.log[''"]' } |
+            ForEach-Object { $_.Left.VariablePath.UserPath } | Sort-Object -Unique)
+        foreach ($c in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+            $name = $c.GetCommandName()
+            if (-not $name -or (Test-DetachedBlock $c)) { continue }
+            $hasWhatIf = @($c.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'WhatIf' }).Count -gt 0
+            if ($name -eq 'Start-Process') {
+                $scratchFindings++
+                $findings.Add([pscustomobject]@{ File = $f.Name; Line = $c.Extent.StartLineNumber; Text = 'Start-Process in a script with -WhatIf: skipped during -WhatIf in PowerShell 7, not in 5.1 (no -WhatIf parameter) - call it from a module function' })
+                continue
+            }
+            if ($hasWhatIf -or -not $scratchTargets.ContainsKey($name) -or -not $scratchVars.Count) { continue }
+            $refs = @(foreach ($t in @(Get-TargetArgument $c $scratchTargets[$name])) {
+                $t.FindAll({ param($v) $v -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) | ForEach-Object { $_.VariablePath.UserPath } | Where-Object { $scratchVars -contains $_ }
+            })
+            if (-not $refs.Count) { continue }
+            $scratchFindings++
+            $findings.Add([pscustomobject]@{ File = $f.Name; Line = $c.Extent.StartLineNumber; Text = ('{0} on the scratch / run-log path ${1} without -WhatIf:$false (skipped during -WhatIf, later steps miss the file)' -f $name, $refs[0]) })
+        }
+    }
     foreach ($l in $loops) {
         $n = $l.Variable.VariablePath.UserPath.ToLowerInvariant()
         if ($ctxValues.ContainsKey($n) -and $l.Extent.StartOffset -gt $ctxValues[$n].Ast.Extent.StartOffset) {
@@ -113,8 +188,9 @@ foreach ($f in $files) {
 }
 
 Write-Host ("Script scope - {0} file(s), {1} module function(s) with ShouldProcess" -f $files.Count, $spFunctions.Count) -ForegroundColor Cyan
-$overwrite = $findings.Count - $whatIfFindings
+$overwrite = $findings.Count - $whatIfFindings - $scratchFindings
 Write-Host ("  [{0}] no script-level context value is overwritten" -f $(if ($overwrite) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($overwrite) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] -WhatIf is passed to every module function with ShouldProcess" -f $(if ($whatIfFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($whatIfFindings) { 'Red' } else { 'Green' })
+Write-Host ("  [{0}] local scratch files and run logs are written also during -WhatIf (no Start-Process in scripts)" -f $(if ($scratchFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($scratchFindings) { 'Red' } else { 'Green' })
 foreach ($x in $findings) { Write-Host ("      {0}:{1} {2}" -f $x.File, $x.Line, $x.Text) -ForegroundColor Red }
 exit $(if ($findings.Count) { 1 } else { 0 })

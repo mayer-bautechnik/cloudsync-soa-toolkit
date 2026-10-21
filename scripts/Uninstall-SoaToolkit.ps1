@@ -59,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.
@@ -111,8 +111,9 @@ $hasManifest = Test-Path -LiteralPath (Get-SoaManifestPath -Config $cfg)
 $roles    = @(Get-SoaHostRoles -Config $cfg -Context $ctx)
 $deployedHosts = @(@(Get-SoaManifestEntry -Manifest $manifest -Kind 'HostDeployment' | ForEach-Object { $_.Key }) + @($roles | ForEach-Object { $_.Host }) | Select-Object -Unique)
 $log = Join-Path (Join-Path $cfg.ReportPath 'State') ('uninstall_{0:yyyyMMdd}.log' -f (Get-Date))
-New-Item -Path (Split-Path $log -Parent) -ItemType Directory -Force | Out-Null
-function Write-UninstallLog([string]$Text) { Add-Content -Path $log -Value ('{0:s} {1} {2}' -f (Get-Date), [Security.Principal.WindowsIdentity]::GetCurrent().Name, $Text) -Encoding UTF8 }
+# The run log is written also during -WhatIf: Export-SoaReport.ps1 evaluates runs by their START line.
+New-Item -Path (Split-Path $log -Parent) -ItemType Directory -Force -WhatIf:$false -Confirm:$false | Out-Null
+function Write-UninstallLog([string]$Text) { Add-Content -Path $log -Value ('{0:s} {1} {2}' -f (Get-Date), [Security.Principal.WindowsIdentity]::GetCurrent().Name, $Text) -Encoding UTF8 -WhatIf:$false -Confirm:$false }
 function Save-Manifest { if (-not $WhatIfPreference -and $hasManifest) { Save-SoaManifest -Config $cfg -Manifest $manifest -Context $ctx } }
 
 # May the toolkit remove this object? Created by the toolkit (manifest or marker) - or -Force.

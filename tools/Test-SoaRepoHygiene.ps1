@@ -24,7 +24,7 @@
     Repository root (default: parent of tools\).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code 0 = clean, 1 = findings.
 #>
 [CmdletBinding()]

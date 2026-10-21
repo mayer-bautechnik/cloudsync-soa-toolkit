@@ -12,13 +12,14 @@
       manifest, GPO version / CSE merge (mocked AD cmdlets), SACL fingerprint, random secret, JSON array reading,
       run log, anonymizer and leak check
     - tools\Test-SoaSecurityClaims.ps1 against a script with deliberate violations (must fail)
-    - tools\Test-SoaScriptScope.ps1 against a script that overwrites script-level values (must fail)
+    - tools\Test-SoaScriptScope.ps1 against a script that overwrites script-level values, omits -WhatIf on a module
+      function or lets -WhatIf skip scratch / run-log writes (must fail)
     - Export-SoaReport.ps1 end to end against a mocked ActiveDirectory module (tests\mocks) and generated fixtures:
       L1-L20 evaluation, anonymization, map outside the folder, leak check, packaging refusal on a leak
     Child processes are used where mocks must not leak into the main test scope.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code = number of failed assertions (0 = all passed).
 #>
 [CmdletBinding()]
@@ -250,6 +251,31 @@ Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails when a ShouldPr
 Set-Content -LiteralPath (Join-Path $scopeDir 'Caller.ps1') -Value @('[CmdletBinding(SupportsShouldProcess = $true)] param()', 'New-Thing -Name a -WhatIf:$WhatIfPreference')
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts -WhatIf:$WhatIfPreference'
+# Scratch files and run logs must be written also during -WhatIf (the 2.0.5 DeployTasks / run-log defect)
+Set-Content -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Value @(
+    '[CmdletBinding(SupportsShouldProcess = $true)] param()'
+    '$stage = Join-Path $env:TEMP ''soa_stage_x'''
+    'New-Item -Path $stage -ItemType Directory -Force | Out-Null'
+    '$runLog = Join-Path $root ''install_x.log'''
+    'function Write-RunLog($t) { Add-Content -Path $runLog -Value $t }'
+)
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on scratch / run-log writes that -WhatIf would skip'
+Set-Content -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Value @(
+    '[CmdletBinding(SupportsShouldProcess = $true)] param()'
+    '$stage = Join-Path $env:TEMP ''soa_stage_x'''
+    'New-Item -Path $stage -ItemType Directory -Force -WhatIf:$false | Out-Null'
+    'if ($PSCmdlet.ShouldProcess(''host'')) { Copy-Item -LiteralPath (Join-Path $stage ''a.ps1'') -Destination ''C:\Target\a.ps1'' -Force }'
+    '$runLog = Join-Path $root ''install_x.log'''
+    'function Write-RunLog($t) { Add-Content -Path $runLog -Value $t -WhatIf:$false }'
+    '$sb = { Remove-Item -Path (Join-Path $env:TEMP ''x'') }'
+)
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts -WhatIf:$false on scratch paths and real writes from the scratch folder'
+Add-Content -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Value '$p = Start-Process -FilePath ''msiexec.exe'' -Wait -PassThru'
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on Start-Process in a script with -WhatIf'
+Remove-Item -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Force
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 passes on the toolkit scripts and tools'
 

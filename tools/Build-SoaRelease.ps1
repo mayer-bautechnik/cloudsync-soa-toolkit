@@ -29,7 +29,7 @@
     Do not ask GitHub for the CI result of the commit. Only when the GitHub CLI is not available - verify CI manually.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Run tools\Invoke-SoaStaticChecks.ps1 first. See docs/RELEASING.md.
 #>
 [CmdletBinding()]

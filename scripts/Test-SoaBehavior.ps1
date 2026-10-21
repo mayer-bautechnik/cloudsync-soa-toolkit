@@ -37,7 +37,7 @@
             behavior-findings.json and behavior-report.html
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.5 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Run as Domain Admin from the admin workstation (RSAT). WinRM to the DCs and agent hosts.
 #>
 [CmdletBinding()]

@@ -22,7 +22,7 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.5'
+$script:SoaVersion     = '2.0.6'
 $script:SoaReleaseDate = '2026-10-21'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
@@ -1107,6 +1107,21 @@ function Set-SoaGpoWmiFilter {
     param([Parameter(Mandatory)][guid]$GpoId, [Parameter(Mandatory)][string]$FilterId, [Parameter(Mandatory)] $Context)
     $dn = Get-SoaGpoAdPath -Id $GpoId -Context $Context
     Set-ADObject -Identity $dn -Server $Context.Pdc -Replace @{ gPCWQLFilter = ('[{0};{1};0]' -f $Context.DnsRoot, $FilterId) }
+}
+
+<#
+    Administrative installation (msiexec /a) of a Microsoft Group Policy package into a folder: extracts the ADMX/ADML,
+    does not install the product. Returns the msiexec exit code.
+    In the module on purpose: Start-Process honours -WhatIf in PowerShell 7 but has no -WhatIf parameter in Windows
+    PowerShell 5.1, so a script cannot opt out portably. A script's $WhatIfPreference does not reach a script module, and
+    the local assignment below also covers a globally set preference. The extraction is part of the -WhatIf dry run.
+#>
+function Expand-SoaMsi {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination)
+    $WhatIfPreference = $false
+    $msi = (Resolve-Path -LiteralPath $Path).Path
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$Destination`"") -Wait -PassThru
+    $proc.ExitCode
 }
 
 <#
