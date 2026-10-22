@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+## 2.0.7 – 2026-10-22
+
+Release process: one script sets the version, a workflow builds the asset from a checked tag and creates a draft release, and every build can be compared by its contents digest. The toolkit scripts are unchanged apart from their version line.
+
+### New
+
+- **`tools/Set-SoaVersion.ps1`** prepares the release commit and is the only supported way to change the version:
+  - refuses a version that exists as a tag on origin or as a GitHub release, also a draft (a published version is never changed);
+  - sets the version and date in every place that carries them and rebuilds the PDF;
+  - turns `## Unreleased` in the CHANGELOG into the version section and leaves an empty `## Unreleased` above it;
+  - creates the release notes from a template if they are missing, runs the static checks and stages the files - it never commits, tags or pushes;
+  - safe to repeat with the same version.
+- **`tools/Test-SoaReleaseTag.ps1`** checks a release tag (T1-T8): name, annotated, SSH signature against `.github/allowed_signers` from `main`, commit on `main`, version, CHANGELOG section, release notes, no existing release. An invalid signature always fails; an unsigned tag fails unless `-AllowUnsigned`.
+- **`.github/workflows/release.yml`**: on a pushed tag `v<major>.<minor>.<patch>`, it checks the tag with the checker taken from `main`, builds the asset (CI gate included), checks `SHA256SUMS.txt` and creates a **draft** release with title, notes and asset. Publishing stays manual. Only this job may write. Transition until signing is set up: the repository variable `SOA_ALLOW_UNSIGNED_TAGS` = `true` accepts an unsigned tag with a warning.
+- **`docs/GITHUB-SETTINGS.md`**: the GitHub settings the process relies on, step by step - immutable releases, Actions permissions, rulesets for `main` and the release tags, the transition variable, security features, and the switch to signed commits and tags.
+- Unit tests for both tools, including tags signed with an allowed and with an unknown SSH key.
+
+### Changed
+
+- **CHANGELOG** has a permanent `## Unreleased` section. New entries go there; the version is decided at release time. H6 requires it as the first section.
+- **The version only where it is used:** the module, the help of the scripts in `scripts\` (deployed), the configuration template, the README status line and the PDF. Removed from the help of `tools\` and `tests\` (H6 now reports a version line there), from the issue templates, `docs/VALIDATION.md` and the README verification table.
+- **H6** also checks the date of the CHANGELOG section, the release notes of the current version (present, no `TODO-RELEASE-NOTES`) and the version in the PDF keywords.
+- **`tools/Build-SoaRelease.ps1`:**
+  - version and date are read from the packaged tag, not from the working tree;
+  - every zip entry carries the release date as its time;
+  - it prints the contents digest (SHA-256 of `SHA256SUMS.txt`) to compare builds of the same tag - the zip digest can differ between machines (deflate implementation of the .NET version);
+  - the CI gate counts only the CI workflow, so it also works inside the release workflow.
+- **PDF:** reproducible build (no creation time) with version and date in its keywords; rebuilt. The PDF of 2.0.6 still carried the version 2.0.5.
+- **CI:** `actions/checkout` v6.0.0 → v6.1.0. Both SHAs were compared with the tags in the `actions/checkout` repository. Since v6.0.2 checkout keeps annotated tags (actions/checkout#882); the release workflow also fetches the tag explicitly.
+- **`docs/RELEASING.md`** rewritten for the phases develop, prepare, tag, release workflow, review and publish. `SECURITY.md`, `AGENTS.md` and `CONTRIBUTING.md` describe the new process.
+
 ## 2.0.6 – 2026-10-21
 
 Makes the `-WhatIf` dry run of `Install-SoaToolkit.ps1` work end to end (found in the lab dry run of 2.0.5) and adds a static check against this class of defect.

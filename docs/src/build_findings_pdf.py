@@ -7,6 +7,9 @@
 Requirements: Python 3.9+, reportlab (pip install reportlab), DejaVu fonts (Linux: fonts-dejavu-core; or set
 SOA_FONT_DIR to a folder with DejaVuSans.ttf, DejaVuSans-Bold.ttf, DejaVuSans-Oblique.ttf, DejaVuSansMono.ttf).
 Version and release date are read from scripts/SoaToolkit.psm1. Run:  python docs/src/build_findings_pdf.py
+tools/Set-SoaVersion.ps1 runs it when the version changes. The PDF is built reproducibly (invariant: no creation time,
+fixed document ID), and its keywords carry 'cloudsync-soa-toolkit-version=<version> release-date=<date>' in plain text,
+which the hygiene check H6 compares with the module.
 Keep the content in line with README.md (key findings, upstream issues, references).
 """
 import os
@@ -102,7 +105,8 @@ def on_page(c, doc):
 
 doc = BaseDocTemplate(OUT, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
                       title='SOA Toolkit - consolidated findings', author='GEBR. MAYER GmbH + Co. KG, Johannes Lämmermann',
-                      subject='Passwordless AD sign-in for users provisioned by Microsoft Entra Cloud Sync')
+                      subject='Passwordless AD sign-in for users provisioned by Microsoft Entra Cloud Sync',
+                      keywords='cloudsync-soa-toolkit-version=%s release-date=%s' % (VERSION, RELEASE), invariant=1)
 frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='f')
 doc.addPageTemplates([PageTemplate(id='p', frames=[frame], onPage=on_page)])
 s = []

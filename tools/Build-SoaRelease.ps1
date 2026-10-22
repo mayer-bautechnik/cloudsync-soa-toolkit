@@ -11,13 +11,22 @@
     Source of the files:
       - inside a git work tree: 'git archive' of -Ref (default HEAD) - honours export-ignore in .gitattributes and
         contains exactly what is committed (run it on the signed tag: -Ref v<version>)
-      - CI gate: the GitHub CLI (gh) is asked for the workflow runs of the commit; the build is refused unless all
-        of them completed successfully (-SkipCiCheck only when gh is unavailable and CI was verified manually)
+      - CI gate: the GitHub CLI (gh) is asked for the runs of the CI workflow (.github/workflows/ci.yml) for the
+        commit; the build is refused unless all of them completed successfully (-SkipCiCheck only when gh is
+        unavailable and CI was verified manually). Other workflows - such as the release workflow that calls this
+        script - are not counted.
       - otherwise: the working folder minus the export-ignore paths and local files (.git, reports, *.local.*)
     Then:
       - SHA256SUMS.txt (sha256sum format) for every file -> Export-SoaReport.ps1 compares the deployed scripts with it
-      - zip with forward slashes (portable) and the prefix folder cloudsync-soa-toolkit/
+      - zip with forward slashes (portable) and the prefix folder cloudsync-soa-toolkit/; every entry carries the
+        release date (00:00) as its time, so the timestamps do not depend on when or where the zip was built
       - <zip>.sha256; the digest is also shown by GitHub next to the asset
+    Version and date are read from scripts/SoaToolkit.psm1 of the packaged content (the tag), not of the working tree.
+
+    Comparing two builds of the same commit (release workflow, maintainer, AI assistant): the contents digest
+    (SHA-256 of SHA256SUMS.txt) is identical when every file is identical. The zip digest can still differ between
+    machines, because the deflate implementation differs between .NET versions (Windows PowerShell 5.1 /
+    PowerShell 7.x).
 
 .PARAMETER Ref
     Git reference to package (tag or commit). Default HEAD.
@@ -29,7 +38,6 @@
     Do not ask GitHub for the CI result of the commit. Only when the GitHub CLI is not available - verify CI manually.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Run tools\Invoke-SoaStaticChecks.ps1 first. See docs/RELEASING.md.
 #>
 [CmdletBinding()]
@@ -42,8 +50,6 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
 $root = Split-Path $ScriptRoot -Parent
 if (-not $OutputPath) { $OutputPath = Split-Path $root -Parent }
-$version = if ((Get-Content -LiteralPath (Join-Path (Join-Path $root 'scripts') 'SoaToolkit.psm1') -Raw) -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
-$name  = "cloudsync-soa-toolkit-$version"
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("soa-release-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $top   = Join-Path $stage 'cloudsync-soa-toolkit'
 New-Item -Path $top -ItemType Directory -Force | Out-Null
@@ -65,7 +71,7 @@ if ($inGit) {
         # CI gate (docs/RELEASING.md step 4/6): all workflow runs of this commit must have succeeded
         if (-not $SkipCiCheck) {
             if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI (gh) not found - install it and run gh auth login, or verify CI manually and use -SkipCiCheck.' }
-            $runsJson = & gh run list --commit $commit --json name,status,conclusion --limit 50
+            $runsJson = & gh run list --commit $commit --workflow ci.yml --json name,status,conclusion --limit 50
             if ($LASTEXITCODE) { throw "gh run list failed for $commit (gh auth login?)" }
             $runs = @($runsJson | ConvertFrom-Json | ForEach-Object { $_ })
             if (-not $runs.Count) { throw "No CI run found for commit $commit - push the commit and wait for CI before building the release." }
@@ -88,6 +94,12 @@ if ($inGit) {
     $commit = 'working folder'
 }
 
+# Version and date of the packaged content
+$psmText = Get-Content -LiteralPath (Join-Path (Join-Path $top 'scripts') 'SoaToolkit.psm1') -Raw
+$version = if ($psmText -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
+$releaseDate = if ($psmText -match "\`$script:SoaReleaseDate\s*=\s*'(\d{4}-\d{2}-\d{2})'") { [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } else { throw 'release date not found in SoaToolkit.psm1' }
+$name = "cloudsync-soa-toolkit-$version"
+
 # SHA256SUMS.txt
 $sums = foreach ($f in (Get-ChildItem -LiteralPath $top -Recurse -File -Force | Sort-Object FullName)) {
     $rel = $f.FullName.Substring($top.Length).TrimStart('\', '/') -replace '\\', '/'
@@ -105,11 +117,13 @@ try {
     try {
         foreach ($f in (Get-ChildItem -LiteralPath $top -Recurse -File -Force | Sort-Object FullName)) {
             $entry = 'cloudsync-soa-toolkit/' + ($f.FullName.Substring($top.Length).TrimStart('\', '/') -replace '\\', '/')
+            [IO.File]::SetLastWriteTime($f.FullName, $releaseDate)   # entry time = release date 00:00, independent of build time and place
             [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
         }
     } finally { $archive.Dispose() }
 } finally { $fs.Dispose() }
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+$contents = (Get-FileHash -LiteralPath (Join-Path $top 'SHA256SUMS.txt') -Algorithm SHA256).Hash.ToLower()
 "$hash  $name.zip" | Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII
 Remove-Item -LiteralPath $stage -Recurse -Force
 
@@ -117,3 +131,4 @@ Write-Host "Package : $zip" -ForegroundColor Cyan
 Write-Host "Source  : $commit"
 Write-Host "Files   : $(@($sums).Count + 1) (incl. SHA256SUMS.txt)"
 Write-Host "SHA-256 : $hash" -ForegroundColor Green
+Write-Host "Contents: $contents  (SHA-256 of SHA256SUMS.txt - compare this value between builds)" -ForegroundColor Green

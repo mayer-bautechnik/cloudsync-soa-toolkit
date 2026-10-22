@@ -4,7 +4,7 @@
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.6 (2026-10-21).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.0.7 (2026-10-22).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -36,7 +36,7 @@ Further documentation:
 | [docs/REPORTING.md](docs/REPORTING.md) | anonymized validation reports and bug reports (`Export-SoaReport.ps1`) |
 | [SECURITY.md](SECURITY.md) | security properties S1-S7, how to verify them, how to report vulnerabilities |
 | [docs/DECISIONS.md](docs/DECISIONS.md), [docs/EVIDENCE.md](docs/EVIDENCE.md) | design decisions; lab evidence behind *Observed* findings |
-| [docs/MAINTENANCE.md](docs/MAINTENANCE.md), [docs/RELEASING.md](docs/RELEASING.md), [AGENTS.md](AGENTS.md) | maintenance routines, release process, rules for contributors and coding agents |
+| [docs/MAINTENANCE.md](docs/MAINTENANCE.md), [docs/RELEASING.md](docs/RELEASING.md), [docs/GITHUB-SETTINGS.md](docs/GITHUB-SETTINGS.md), [AGENTS.md](AGENTS.md) | maintenance routines, release process and the GitHub settings it relies on, rules for contributors and coding agents |
 | [CHANGELOG.md](CHANGELOG.md), [docs/Consolidated-Findings.pdf](docs/Consolidated-Findings.pdf) | changes per version; findings as PDF |
 
 ---
@@ -284,7 +284,7 @@ These findings have not been reported upstream yet. If you can reproduce them, c
 |---|---|
 | Findings about Microsoft's features (K1-K21) | *Documented* findings link their sources. *Observed* findings were measured **manually by the maintainer** in a lab domain ([docs/EVIDENCE.md](docs/EVIDENCE.md); completing the records with dates and builds is in progress) |
 | Static quality of the 2.x scripts | parser, PSScriptAnalyzer (PowerShell 5.1 and 7 syntax), unit tests, an end-to-end test of the report tool against a mocked AD module, the security-claim checker and the script-scope checker (overwritten script-level values, `-WhatIf` propagation). They run in CI on every change |
-| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet, as of 2.0.6 (2026-10-21) |
+| **End-to-end behaviour of the 2.x scripts in a real domain** | **in progress.** None of the items L1-L20 has been verified yet ([docs/VALIDATION.md](docs/VALIDATION.md)) |
 
 Open items of the lab validation ([docs/VALIDATION.md](docs/VALIDATION.md)):
 

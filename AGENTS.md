@@ -14,7 +14,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 | Security properties that must not break (S1-S7) | [SECURITY.md](SECURITY.md) |
 | Setup / operations | [docs/SETUP.md](docs/SETUP.md), [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | Reports and bug reports from an environment | [docs/REPORTING.md](docs/REPORTING.md) |
-| Releases and recurring maintenance | [docs/RELEASING.md](docs/RELEASING.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md) |
+| Releases and recurring maintenance | [docs/RELEASING.md](docs/RELEASING.md), [docs/GITHUB-SETTINGS.md](docs/GITHUB-SETTINGS.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md) |
 
 ## Layout
 
@@ -45,7 +45,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
    - Naming: `Soa*` = toolkit / infrastructure, `CloudUser*` = target state of users, approved verbs only.
    - Shared logic goes into `SoaToolkit.psm1`.
    - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module. Conversely, inside the script `-WhatIf` does reach the built-in cmdlets: local scratch work the dry run needs itself (staging in `%TEMP%`, the run log) passes `-WhatIf:$false -Confirm:$false`, `Start-Process` belongs in a module function (PowerShell 7 honours `-WhatIf` there, 5.1 has no such parameter), and read-only child scripts run through `Invoke-ReadOnlyScript`.
-8. **One version.** `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `.NOTES` line of every script, the configuration header, the README status line and CHANGELOG must match. `tools/Test-SoaRepoHygiene.ps1` checks this (H6).
+8. **One version, set by one script.** Changes go into `CHANGELOG.md` under `## Unreleased`; do not change the version in a normal change. Between releases `main` carries the last released version. At release time `tools/Set-SoaVersion.ps1` sets `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `Toolkit:` help line of every script in `scripts/` (only there - tools and tests carry no version), the configuration header, the README status line and the PDF keywords, and turns `## Unreleased` into the version section. `tools/Test-SoaRepoHygiene.ps1` checks the result (H6). A published version is never changed: fix forward with the next version ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ## How to check a change
 
@@ -53,7 +53,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 .\tools\Invoke-SoaStaticChecks.ps1      # parser, PSScriptAnalyzer, tests, security claims, script scope, hygiene
 ```
 
-CI runs the same checks on PowerShell 7 and Windows PowerShell 5.1. A release is tagged and published only after both CI jobs are green for the release commit ([docs/RELEASING.md](docs/RELEASING.md)). Behaviour in a real domain can only be verified in a lab (docs/VALIDATION.md). Say so instead of claiming it.
+CI runs the same checks on PowerShell 7 and Windows PowerShell 5.1. A release is tagged only after both CI jobs are green for the release commit; the release workflow checks the tag and CI again, builds the asset and creates a draft that the maintainer publishes ([docs/RELEASING.md](docs/RELEASING.md)). Behaviour in a real domain can only be verified in a lab (docs/VALIDATION.md). Say so instead of claiming it.
 
 ## Commits
 

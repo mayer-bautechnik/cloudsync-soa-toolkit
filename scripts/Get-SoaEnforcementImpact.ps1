@@ -31,7 +31,7 @@
     Folder for CSV + HTML. Default: <ReportPath>\Impact\<timestamp> (or Desktop\SOA-Impact_<timestamp> without configuration)
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
+    Toolkit: cloudsync-soa-toolkit 2.0.7 (2026-10-22)
     Read-only. Run as Domain Admin from the admin workstation with RSAT. Requires WinRM (5985) to every writable DC.
     Usable without the rest of the toolkit (without a configuration file the toolkit gMSA is simply not labelled).
 #>

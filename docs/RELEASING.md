@@ -1,108 +1,123 @@
 # Releasing
 
-Checklist for the maintainer. GitHub releases of this repository are **immutable**: after publishing, the tag and the assets can no longer be changed or replaced. Every gate below must therefore pass **before** the tag is created and the release is published. A mistake found later can only be fixed with a new version.
+How a version gets from `main` to a published GitHub release. GitHub releases of this repository are **immutable**: once published, the tag and the assets can no longer be changed or deleted. Every check below therefore runs **before** publishing. A mistake found later is fixed with a new version.
 
 ```mermaid
 flowchart LR
-    A["1 Prepare<br/>version, docs, PDF,<br/>release notes"] --> B["2 Local checks<br/>pwsh 7 + Windows PowerShell 5.1"]
-    B --> C["3 Push the commit<br/>(no tag yet)"]
-    C --> D{"4 CI green?<br/>both jobs"}
-    D -- no --> A
-    D -- yes --> E["5 Signed tag<br/>on exactly this commit"]
-    E --> F["6 Build asset from the tag<br/>(refuses if CI not green)"]
-    F --> G["7 Draft release,<br/>verify, publish"]
+    A["1 Develop<br/>entries under<br/>## Unreleased"] --> B["2 Prepare<br/>Set-SoaVersion.ps1,<br/>release notes, commit"]
+    B --> C{"CI green?<br/>both jobs"}
+    C -- no --> B
+    C -- yes --> D["3 Tag<br/>signed, pushed"]
+    D --> E["4 Release workflow<br/>check tag, build,<br/>draft release"]
+    E --> F["5 Review, compare,<br/>publish (manual)"]
 ```
 
-## 1. Prepare
+## Who does what
 
-1. Set the version and date in `scripts/SoaToolkit.psm1` (`$script:SoaVersion`, `$script:SoaReleaseDate`).
-2. Use the same version and date in:
-   - the `.NOTES` line of every script in `scripts/`, `tools/` and `tests/`;
-   - the configuration header;
-   - the README status line.
-3. Add a CHANGELOG entry and update the README and docs (status, verification, evidence levels).
-4. Rebuild the PDF: `python docs/src/build_findings_pdf.py` (version and date are read from the module).
-5. Write the release notes: `.github/release-notes/v<version>.md`. Use English and GitHub Flavored Markdown, with links to `/blob/v<version>/...`. Release notes of published versions are history: never change them afterwards; corrections go into the next version.
+| Actor | Part |
+|---|---|
+| Maintainer | decides the version, runs `tools/Set-SoaVersion.ps1`, commits, tags, reviews and publishes the draft. Nothing is published without this last manual step. |
+| AI assistant (optional) | prepares changes and CHANGELOG entries, drafts release notes, runs the static checks and builds the repository zip and a release zip from the same content, for comparison and lab deployment. It does not push, tag or publish. |
+| CI (`.github/workflows/ci.yml`) | static checks and tests on PowerShell 7 and Windows PowerShell 5.1 for every push to `main` and every pull request |
+| Release workflow (`.github/workflows/release.yml`) | runs when a tag `v<major>.<minor>.<patch>` is pushed: checks the tag, builds the asset, creates a **draft** release. It never changes the repository. |
+| GitHub | rulesets for `main` and the release tags, immutable releases, release attestation ([GITHUB-SETTINGS.md](GITHUB-SETTINGS.md)) |
 
-## 2. Local checks
+## Version rules
+
+- [Semantic Versioning](https://semver.org/): patch for fixes, minor for new features, major for breaking changes. A published version never changes.
+- The version is changed **only** by `tools/Set-SoaVersion.ps1`, at release time. Between releases, `main` carries the last released version; new entries collect in `CHANGELOG.md` under `## Unreleased`.
+- Places that carry the version (all set by the script, checked by H6): `$script:SoaVersion` / `$script:SoaReleaseDate` in `scripts/SoaToolkit.psm1`, the `Toolkit:` help line of every script in `scripts/`, the header of `SoaToolkit.config.example.psd1`, the README status line, the keywords of `docs/Consolidated-Findings.pdf`, and the CHANGELOG section. Tools and tests carry no version.
+
+## Phase 1 – Develop
+
+1. Make the change. Add an entry to `CHANGELOG.md` under `## Unreleased` (*Fixed*, *Changed*, *New*), not under a version.
+2. Run `.\tools\Invoke-SoaStaticChecks.ps1`.
+3. Commit with sign-off (`git commit -s`), push, and check that both CI jobs are green.
+
+## Phase 2 – Prepare the release
+
+1. **Know what is published.** `git fetch --tags origin` and `gh release list`. Never rely on a handover note for this.
+2. **Choose the version** (Semantic Versioning, see above).
+3. **Write the release notes** `.github/release-notes/v<version>.md` (they can be written before step 4; the script creates a template if the file is missing):
+   - first line: `<!-- title: v<version> – <summary> -->` - the release title, at most about 60 characters. It does not render; the release workflow uses it as the title and removes it from the release text;
+   - English, GitHub Flavored Markdown, links to `/blob/v<version>/...`;
+   - no `TODO-RELEASE-NOTES` marker left (H6 and the release workflow refuse it).
+4. **Set the version:**
+   ```powershell
+   .\tools\Set-SoaVersion.ps1 -Version <x.y.z>            # -WhatIf shows what would change
+   ```
+   It refuses a version that exists as a tag on origin or as a GitHub release (also a draft), sets the version everywhere, turns `## Unreleased` into `## <version> – <date>` and leaves an empty `## Unreleased` above it, rebuilds the PDF (Python 3 with reportlab), runs the static checks and stages the changed files. It does not commit. Running it again with the same version is safe; use this to repeat the check against origin and GitHub on a release commit that was prepared elsewhere (for example by the AI assistant, with `-SkipRemoteCheck`).
+5. Review the diff, commit as `Release <version>` with sign-off, push to `main`.
+6. **Wait until both CI jobs are green for this commit.** Do not tag before that.
+
+## Phase 3 – Tag
 
 ```powershell
-.\tools\Invoke-SoaStaticChecks.ps1        # from PowerShell 7 on Windows: also runs tests + claims under Windows PowerShell 5.1
-```
-
-Everything must pass. The hygiene check (H6) verifies that the version is consistent everywhere. If you run it on Linux or macOS, Windows PowerShell 5.1 is not tested locally, and the CI job is the only 5.1 test.
-
-## 3. Push the commit, without the tag
-
-```powershell
-git add -A
-git commit -s -m "Release <version>: <summary>"
-git push origin main
-```
-
-## 4. Gate: CI must be green
-
-Both jobs, *PowerShell 7 - all static checks* and *Windows PowerShell 5.1 - tests and claims*, must succeed **for this commit**. Check in the Actions tab or with the GitHub CLI:
-
-```powershell
-gh run list --commit (git rev-parse HEAD) --json name,status,conclusion
-```
-
-If a job fails, fix it, commit again and wait for green. Do not create a tag before that.
-
-## 5. Signed tag on exactly this commit
-
-```powershell
-git tag -s v<version> -m "cloudsync-soa-toolkit <version>"     # tag.gpgsign = true signs automatically
+git tag -s v<version> -m "cloudsync-soa-toolkit <version>"      # signed (target state)
+git tag -a v<version> -m "cloudsync-soa-toolkit <version>"      # transition: annotated, unsigned (see Signing)
+git fetch origin
+.\tools\Test-SoaReleaseTag.ps1 -Tag v<version>                  # add -AllowUnsigned during the transition
 git push origin v<version>
-git verify-tag v<version>                                       # needs gpg.ssh.allowedSignersFile
 ```
 
-A tag that has been pushed but **not yet released** may still be deleted and recreated if a problem shows up (`git tag -d v<version>`, then `git push origin :refs/tags/v<version>`). Once the release is published, never move or delete the tag.
+`Test-SoaReleaseTag.ps1` runs the same checks as the release workflow (T1-T8) before the tag leaves your machine. Only the maintainer can push, move or delete release tags (tag ruleset).
 
-## 6. Build the asset from the tag
+## Phase 4 – Release workflow (automatic)
 
-```powershell
-.\tools\Build-SoaRelease.ps1 -Ref v<version>
-```
+On the pushed tag, `.github/workflows/release.yml`:
 
-- The script asks the GitHub CLI for the CI runs of the tagged commit and **refuses to build** unless all of them succeeded.
-- `-SkipCiCheck` exists only for the case that the CLI is unavailable. Then verify CI manually (step 4).
-- It creates `cloudsync-soa-toolkit-<version>.zip` from `git archive` of the tag (`export-ignore` paths are left out), with `SHA256SUMS.txt` inside and a `.sha256` file next to it.
+1. takes `tools/Test-SoaReleaseTag.ps1` **from `main`** (not from the tag) and checks the tag:
+   - T1 name, T2 annotated, T3 SSH signature against `.github/allowed_signers` from `main`, T4 commit on `main`, T5 version, T6 CHANGELOG section, T7 release notes (title line, no TODO marker), T8 no release or draft for the tag yet;
+2. builds the asset with `tools/Build-SoaRelease.ps1 -Ref v<version>` - it refuses unless the CI workflow succeeded for the tagged commit - and checks `SHA256SUMS.txt` and the `.sha256` file;
+3. creates a **draft** release with the title and notes from the notes file and uploads the zip and the `.sha256`;
+4. writes the results to the job summary: checks T1-T8, asset SHA-256, contents digest.
 
-## 7. GitHub release
+If it fails:
 
-1. *Draft a new release*, then choose the **existing** tag `v<version>`. If GitHub creates the tag itself, it is an unsigned lightweight tag.
-2. Title: `v<version> – <short summary>`, at most about 60 characters.
-3. Text: content of `.github/release-notes/v<version>.md`.
-4. Upload the zip, then compare the digest GitHub shows with the `.sha256` file.
-5. **Last check before publishing:** CI of the tagged commit is green, the tag is signed, the digest matches.
-6. Set as the latest release, not a pre-release. Publish.
+| Situation | What to do |
+|---|---|
+| CI was not finished when the tag was pushed | wait until CI is green, then *Re-run failed jobs* of the release workflow run |
+| A check or the build failed | fix it in a new commit on `main`. Then delete the tag (`git push origin :refs/tags/v<version>`, `git tag -d v<version>`), tag the new commit and push again. Allowed while no release exists. |
+| A draft exists but is wrong | delete the draft on the releases page, then as above |
+| A published release is wrong | never touch tag or assets - see *If a published release turns out to be broken* |
 
-## 8. After the release
+## Phase 5 – Review and publish
 
-- Check that the README renders, the release is marked *Immutable* and the asset digest matches.
-- New observations go to `docs/EVIDENCE.md`. Validation results are recorded in `docs/VALIDATION.md`.
+1. Open the draft on the releases page. Check title and text.
+2. Open the workflow run and read the job summary: every check PASS (T3 WARN only during the signing transition), asset digest, contents digest.
+3. **Compare with an independent build of the same tag.** Build it yourself with `.\tools\Build-SoaRelease.ps1 -Ref v<version>`, or use the release zip the AI assistant supplied with the change. The **contents digest** (SHA-256 of `SHA256SUMS.txt`, printed by the script) must be identical. The zip digest itself can differ between machines, because the deflate implementation differs between .NET versions. This independent zip can also be deployed in the lab before publishing.
+4. Compare the digest GitHub shows next to the asset with the `.sha256` file.
+5. Set it as the latest release (not a pre-release) and publish. GitHub locks the tag and the assets and creates a release attestation.
+
+## Phase 6 – After the release
+
+- Check that the release is marked *Immutable* and the README renders.
+- Nothing to do in the CHANGELOG: the empty `## Unreleased` is already there for the next changes.
+- New observations go to `docs/EVIDENCE.md`, validation results to `docs/VALIDATION.md`.
 
 ## If a published release turns out to be broken
 
 The release cannot be replaced, and that is intended: users and reviewers rely on a version always meaning the same code.
 
-1. Fix it forward: prepare a patch version with the fix and a *Fixed* entry that names the affected version. Run it through all gates above.
-2. In the broken release, edit **only the release text**, if GitHub allows it for immutable releases. Add a line at the top: "Superseded by v<new version> because of <problem>; do not use." Do not change the tag, the assets or the file in `.github/release-notes/`.
+1. Fix forward: prepare the next patch version with the fix and a *Fixed* entry that names the affected version. Run it through all phases above.
+2. GitHub allows editing the title and text of an immutable release. Add one line at the top of the broken release's text: "Superseded by v<new version> because of <problem>; do not use." Do not change the tag, the assets or the file in `.github/release-notes/`.
 3. If the problem is security-relevant, also follow [SECURITY.md](../SECURITY.md) (advisory).
 
-## One-time setup (maintainer)
+## Signing
 
-- **Signing:** SSH signing key (preferably on a hardware key), uploaded to GitHub as a *Signing Key*. Publish the public key in `.github/allowed_signers`, so anyone can verify tags without GitHub:
-  ```
-  git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v<version>
-  ```
-- **Repository settings:**
-  - branch protection on `main`: signed commits, both CI jobs required as status checks, no force pushes;
-  - immutable releases on;
-  - private vulnerability reporting on;
-  - Dependabot for GitHub Actions: `.github/dependabot.yml` is in the repository. Enable *Dependabot version updates* if it is not active, and review its pull requests like any other change.
-- **CI hardening:** actions are pinned to the full commit SHA with the version as a comment (currently `actions/checkout` v6.0.0, Node.js 24). Before accepting a new pin, compare the SHA with the release tag in the action's repository.
-- **GitHub CLI** (`gh auth login`) on the release workstation, for the CI gate in step 6.
-- **Terms file:** create `SoaToolkit.terms.txt` at the top level from `SoaToolkit.terms.example.txt`. It is git-ignored. List company domains, internal host names and other identifiers; `Test-SoaRepoHygiene.ps1` (H5) then blocks them, and `Export-SoaReport.ps1` uses the same file for pseudonyms.
+Target state: commits and release tags are signed with an SSH key of the maintainer (preferably on a hardware key). The public key is in `.github/allowed_signers`, so anyone can verify a tag without GitHub:
+
+```powershell
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v<version>
+```
+
+The release workflow verifies the tag against `allowed_signers` taken from `main`. An invalid signature always stops the release. An **unsigned** tag stops it too, unless the repository variable `SOA_ALLOW_UNSIGNED_TAGS` is set to `true` - a transition setting until signing is set up; the run then shows a warning. How to set up signing and remove the variable: [GITHUB-SETTINGS.md](GITHUB-SETTINGS.md#switch-to-signed-commits-and-tags).
+
+## One-time setup
+
+- **GitHub:** rulesets, Actions settings, variable, immutable releases, private vulnerability reporting - step by step in [GITHUB-SETTINGS.md](GITHUB-SETTINGS.md).
+- **Release workstation:**
+  - Git and the GitHub CLI - `Set-SoaVersion.ps1` and `Test-SoaReleaseTag.ps1` ask origin and GitHub; `Build-SoaRelease.ps1` reads the CI result. Install with `winget install --id GitHub.cli`, then open a new terminal (VS Code: restart it completely, so the integrated terminal sees the new PATH) and run `gh auth login` (GitHub.com, HTTPS, login with a web browser). Check with `gh auth status`;
+  - Python 3 with `reportlab` and the DejaVu fonts (or `SOA_FONT_DIR`) for the PDF - or let the AI assistant prepare the release commit and repeat `Set-SoaVersion.ps1` locally;
+  - `SoaToolkit.terms.txt` at the top level, created from `SoaToolkit.terms.example.txt` (git-ignored). List company domains, internal host names and other identifiers; `Test-SoaRepoHygiene.ps1` (H5) blocks them, and `Export-SoaReport.ps1` uses the same file for pseudonyms.
+- **CI hardening:** actions are pinned to the full commit SHA with the version as a comment (currently `actions/checkout` v6.1.0). Before accepting a new pin from Dependabot, compare the SHA with the release tag in the action's repository (`git ls-remote --tags https://github.com/actions/checkout`).

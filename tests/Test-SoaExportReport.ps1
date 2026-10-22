@@ -7,9 +7,6 @@
 .SYNOPSIS
     End-to-end test of Export-SoaReport.ps1 against the mocked ActiveDirectory module in tests\mocks (fictitious
     domain fabrikam.local). Called by Invoke-SoaUnitTests.ps1; exit code = number of failed assertions.
-
-.NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string] $WorkPath)

@@ -32,7 +32,6 @@
     .\tools\Test-SoaSecurityClaims.ps1 -Json .\claims.json
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code 0 = all claims hold, 1 = at least one violation.
 #>
 [CmdletBinding()]

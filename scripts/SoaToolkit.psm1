@@ -22,8 +22,8 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.6'
-$script:SoaReleaseDate = '2026-10-21'
+$script:SoaVersion     = '2.0.7'
+$script:SoaReleaseDate = '2026-10-22'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
 

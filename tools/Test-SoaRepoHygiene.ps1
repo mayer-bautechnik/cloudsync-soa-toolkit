@@ -18,13 +18,15 @@
         The former tools\forbidden-terms.local.txt is still read.
     Scanned are the files git would publish (git ls-files: tracked + new, not ignored); without git all files except
     the local ones (configuration, terms, maps, reports).
-    H6  one version everywhere: SoaToolkit.psm1, script .NOTES, configuration header, README status, CHANGELOG
+    H6  one version everywhere, as tools\Set-SoaVersion.ps1 sets it: SoaToolkit.psm1, the "Toolkit:" help line of
+        every script in scripts\ (and of no file in tools\ or tests\ - they are not deployed), configuration header,
+        README status, PDF keywords; CHANGELOG starts with '## Unreleased' and has '## <version> – <date>'; the
+        release notes .github\release-notes\v<version>.md exist and contain no TODO-RELEASE-NOTES
 
 .PARAMETER Root
     Repository root (default: parent of tools\).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code 0 = clean, 1 = findings.
 #>
 [CmdletBinding()]
@@ -88,13 +90,27 @@ if (Test-Path -LiteralPath $psm) {
     $d = if ((Get-Content -LiteralPath $psm -Raw) -match "\`$script:SoaReleaseDate\s*=\s*'([^']+)'") { $Matches[1] } else { $null }
     foreach ($s in @(Get-ChildItem -LiteralPath (Join-Path $Root 'scripts') -Filter '*.ps1') + @(Get-ChildItem -LiteralPath (Join-Path $Root 'tools') -Filter '*.ps1') + @(Get-ChildItem -LiteralPath (Join-Path $Root 'tests') -Filter '*.ps1' -ErrorAction SilentlyContinue)) {
         $t = Get-Content -LiteralPath $s.FullName -Raw
-        if ($t -match 'Toolkit: cloudsync-soa-toolkit (\S+) \((\d{4}-\d{2}-\d{2})\)') { if ($Matches[1] -ne $v -or $Matches[2] -ne $d) { Add-Finding 'H6' $s.Name "help says $($Matches[1]) ($($Matches[2])), module says $v ($d)" } }
-        elseif ($s.DirectoryName -like '*scripts') { Add-Finding 'H6' $s.Name 'no "Toolkit: cloudsync-soa-toolkit <version> (<date>)" line in the help' }
+        $deployed = ((Split-Path $s.DirectoryName -Leaf) -eq 'scripts')
+        if ($t -match 'Toolkit: cloudsync-soa-toolkit (\S+) \((\d{4}-\d{2}-\d{2})\)') {
+            if (-not $deployed) { Add-Finding 'H6' $s.Name 'version line in a file that is not deployed - only scripts\ carry it (remove the line)' }
+            elseif ($Matches[1] -ne $v -or $Matches[2] -ne $d) { Add-Finding 'H6' $s.Name "help says $($Matches[1]) ($($Matches[2])), module says $v ($d) - tools\Set-SoaVersion.ps1" }
+        }
+        elseif ($deployed) { Add-Finding 'H6' $s.Name 'no "Toolkit: cloudsync-soa-toolkit <version> (<date>)" line in the help' }
     }
     $cfgFile = Join-Path $Root 'SoaToolkit.config.example.psd1'
     if ((Get-Content -LiteralPath $cfgFile -Raw) -notmatch "cloudsync-soa-toolkit $([regex]::Escape($v))\)") { Add-Finding 'H6' 'SoaToolkit.config.example.psd1' "header does not name version $v" }
     if ((Get-Content -LiteralPath (Join-Path $Root 'README.md') -Raw) -notmatch "Status: $([regex]::Escape($v)) \($d\)") { Add-Finding 'H6' 'README.md' "status line does not say $v ($d)" }
-    if ((Get-Content -LiteralPath (Join-Path $Root 'CHANGELOG.md') -Raw) -notmatch "(?m)^## $([regex]::Escape($v)) ") { Add-Finding 'H6' 'CHANGELOG.md' "no entry for $v" }
+    $changelog = Get-Content -LiteralPath (Join-Path $Root 'CHANGELOG.md') -Raw -Encoding UTF8
+    $firstSection = [regex]::Match($changelog, '(?m)^## .*$').Value.Trim()
+    if ($firstSection -ne '## Unreleased') { Add-Finding 'H6' 'CHANGELOG.md' "first section is '$firstSection' - it must be '## Unreleased' (new entries go there; tools\Set-SoaVersion.ps1 turns them into the version section)" }
+    if ($changelog -notmatch ("(?m)^## $([regex]::Escape($v)) " + [char]0x2013 + " $([regex]::Escape($d))\s*$")) { Add-Finding 'H6' 'CHANGELOG.md' "no section '## $v – $d'" }
+    $notesFile = Join-Path (Join-Path (Join-Path $Root '.github') 'release-notes') "v$v.md"
+    if (-not (Test-Path -LiteralPath $notesFile)) { Add-Finding 'H6' "v$v.md" 'release notes of the current version missing in .github\release-notes' }
+    elseif ((Get-Content -LiteralPath $notesFile -Raw -Encoding UTF8) -match 'TODO-RELEASE-NOTES') { Add-Finding 'H6' "v$v.md" 'release notes still contain TODO-RELEASE-NOTES' }
+    $pdfFile = Join-Path (Join-Path $Root 'docs') 'Consolidated-Findings.pdf'
+    if ((Test-Path -LiteralPath $pdfFile) -and -not ([Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($pdfFile)).Contains("cloudsync-soa-toolkit-version=$v release-date=$d"))) {
+        Add-Finding 'H6' 'Consolidated-Findings.pdf' "PDF keywords do not say version $v ($d) - python docs/src/build_findings_pdf.py (tools\Set-SoaVersion.ps1 does it)"
+    }
 }
 
 Write-Host ("Repository hygiene - {0} text file(s), {1} term(s) from SoaToolkit.terms.txt" -f $files.Count, $forbidden.Count) -ForegroundColor Cyan

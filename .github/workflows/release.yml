@@ -1,0 +1,107 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# Copyright (c) 2026 GEBR. MAYER GmbH + Co. KG and Johannes Lämmermann
+# Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
+#
+# Release workflow (docs/RELEASING.md, phase 4). Runs when a tag v<major>.<minor>.<patch> is pushed:
+#   1. checks the tag with tools/Test-SoaReleaseTag.ps1 taken from main (not from the tag): annotated, signature,
+#      on main, version, CHANGELOG, release notes, no release yet
+#   2. builds the asset with tools/Build-SoaRelease.ps1 from the tag (refuses unless the CI workflow is green for
+#      the commit) and checks SHA256SUMS.txt
+#   3. creates a DRAFT release with the notes and the asset. Publishing stays a manual step of the maintainer.
+# It never changes the repository. Only this job may write (contents: write, for the draft release).
+# Transition until signed tags are set up: repository variable SOA_ALLOW_UNSIGNED_TAGS = true accepts an unsigned
+# annotated tag with a warning. Remove the variable once tags are signed - then an unsigned tag fails.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  POWERSHELL_TELEMETRY_OPTOUT: 1
+
+jobs:
+  draft:
+    name: Verify tag, build asset, draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # create the draft release and upload the asset
+      actions: read     # read the CI result of the tagged commit
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOA_ALLOW_UNSIGNED_TAGS: ${{ vars.SOA_ALLOW_UNSIGNED_TAGS }}
+    steps:
+      - name: Check the tag name
+        shell: bash
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::unexpected tag name"; exit 1; fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (Node.js 24)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the annotated tag and main
+        shell: bash
+        # actions/checkout before v6.0.2 replaced an annotated tag by a lightweight one (actions/checkout#882);
+        # fetching it explicitly keeps the tag object with its signature, whatever version is pinned.
+        run: git fetch --no-tags --force origin "+refs/tags/${TAG}:refs/tags/${TAG}" "+refs/heads/main:refs/remotes/origin/main"
+
+      - name: Verify the tag (checker from main)
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show origin/main:tools/Test-SoaReleaseTag.ps1 > "$RUNNER_TEMP/Test-SoaReleaseTag.ps1"
+          args=(-Tag "$TAG" -Root "$GITHUB_WORKSPACE" -NotesOut "$RUNNER_TEMP/release-notes.md")
+          if [ "${SOA_ALLOW_UNSIGNED_TAGS:-}" = "true" ]; then
+            args+=(-AllowUnsigned)
+            echo "::warning::SOA_ALLOW_UNSIGNED_TAGS is set - an unsigned tag is accepted (transition, open point)"
+          fi
+          pwsh -NoProfile -NonInteractive -File "$RUNNER_TEMP/Test-SoaReleaseTag.ps1" "${args[@]}"
+
+      - name: Build the release asset
+        shell: bash
+        run: pwsh -NoProfile -NonInteractive -File ./tools/Build-SoaRelease.ps1 -Ref "$TAG" -OutputPath "$RUNNER_TEMP"
+
+      - name: Check the asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${TAG#v}"
+          zip="$RUNNER_TEMP/cloudsync-soa-toolkit-$v.zip"
+          (cd "$RUNNER_TEMP" && sha256sum -c "cloudsync-soa-toolkit-$v.zip.sha256")
+          mkdir -p "$RUNNER_TEMP/check"
+          unzip -q "$zip" -d "$RUNNER_TEMP/check"
+          (cd "$RUNNER_TEMP/check/cloudsync-soa-toolkit" && sha256sum -c --quiet SHA256SUMS.txt)
+          {
+            echo "### Release asset $TAG"
+            echo ""
+            echo "- Asset SHA-256: \`$(cut -d' ' -f1 "$zip.sha256")\`"
+            echo "- Contents digest (SHA-256 of SHA256SUMS.txt): \`$(sha256sum "$RUNNER_TEMP/check/cloudsync-soa-toolkit/SHA256SUMS.txt" | cut -d' ' -f1)\`"
+            echo "- Files: $(wc -l < "$RUNNER_TEMP/check/cloudsync-soa-toolkit/SHA256SUMS.txt") (+ SHA256SUMS.txt)"
+            echo ""
+            echo "Compare the contents digest with a local build of the same commit (tools/Build-SoaRelease.ps1). The asset digest can differ between machines (deflate implementation)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the draft release
+        shell: bash
+        env:
+          TITLE: ${{ steps.verify.outputs.title }}
+        run: |
+          set -euo pipefail
+          v="${TAG#v}"
+          gh release create "$TAG" --draft --verify-tag --title "$TITLE" --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "$RUNNER_TEMP/cloudsync-soa-toolkit-$v.zip" "$RUNNER_TEMP/cloudsync-soa-toolkit-$v.zip.sha256"
+          echo "Draft release created: review it on the releases page, then publish (docs/RELEASING.md, phase 5)." >> "$GITHUB_STEP_SUMMARY"

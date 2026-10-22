@@ -14,12 +14,14 @@
     - tools\Test-SoaSecurityClaims.ps1 against a script with deliberate violations (must fail)
     - tools\Test-SoaScriptScope.ps1 against a script that overwrites script-level values, omits -WhatIf on a module
       function or lets -WhatIf skip scratch / run-log writes (must fail)
+    - tools\Set-SoaVersion.ps1 on a fixture (version everywhere, Unreleased -> version section, notes template,
+      repeat, refusals) and tools\Test-SoaReleaseTag.ps1 against a local git repository (unsigned, lightweight, not on
+      main, SSH-signed with an allowed and with an unknown key)
     - Export-SoaReport.ps1 end to end against a mocked ActiveDirectory module (tests\mocks) and generated fixtures:
       L1-L20 evaluation, anonymization, map outside the folder, leak check, packaging refusal on a leak
     Child processes are used where mocks must not leak into the main test scope.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.6 (2026-10-21)
     Exit code = number of failed assertions (0 = all passed).
 #>
 [CmdletBinding()]
@@ -276,6 +278,81 @@ Add-Content -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Value '$p = Start-
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
 Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on Start-Process in a script with -WhatIf'
 Remove-Item -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Force
+
+# Release tooling: Set-SoaVersion.ps1 on a fixture (no git, no GitHub, no PDF, no checks)
+$en = [char]0x2013
+$sv = Join-Path $tmp 'setversion'
+foreach ($d in 'scripts', '.github\release-notes') { New-Item -Path (Join-Path $sv $d) -ItemType Directory -Force | Out-Null }
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+function Write-Fixture([string]$Rel, [string[]]$Lines) { [IO.File]::WriteAllText((Join-Path $sv $Rel), (($Lines -join "`n") + "`n"), $utf8NoBom) }
+Write-Fixture 'scripts\SoaToolkit.psm1' @("`$script:SoaVersion     = '1.2.3'", "`$script:SoaReleaseDate = '2026-01-01'")
+Write-Fixture 'scripts\Tool.ps1' @('<#', '.NOTES', ('    Toolkit: cloudsync-soa' + '-toolkit 1.2.3 (2026-01-01)'), '#>')   # split: H6 must not see a version line in tests\
+Write-Fixture 'SoaToolkit.config.example.psd1' @('# SOA Toolkit configuration TEMPLATE (cloudsync-soa-toolkit 1.2.3)', '@{}')
+Write-Fixture 'README.md' @('> **Status: 1.2.3 (2026-01-01).** text')
+Write-Fixture 'CHANGELOG.md' @('# Changelog', '', '## Unreleased', '', '### Fixed', '', '- fix a', '', "## 1.2.3 $en 2026-01-01", '', '- old')
+Write-Fixture '.github\release-notes\v1.2.3.md' @('notes', '---', 'Licensed under MPL-2.0 x [README](https://github.com/x/blob/v1.2.3/README.md)')
+$setVersion = Join-Path (Join-Path $repo 'tools') 'Set-SoaVersion.ps1'
+$svArgs = @('-Root', $sv, '-SkipRemoteCheck', '-NoStage', '-SkipPdf', '-SkipChecks')
+& $exe -NoProfile -NonInteractive -File $setVersion -Version 1.3.0 -Date 2026-02-02 @svArgs *> $null
+$clText = [IO.File]::ReadAllText((Join-Path $sv 'CHANGELOG.md'))
+Assert-Test ($LASTEXITCODE -eq 0 -and [IO.File]::ReadAllText((Join-Path $sv 'scripts\SoaToolkit.psm1')) -match "SoaVersion\s+= '1\.3\.0'[\s\S]*SoaReleaseDate = '2026-02-02'") 'Set-SoaVersion.ps1 sets version and date in the module'
+Assert-Test (([IO.File]::ReadAllText((Join-Path $sv 'scripts\Tool.ps1')) -match 'Toolkit: cloudsync-soa-toolkit 1\.3\.0 \(2026-02-02\)') -and ([IO.File]::ReadAllText((Join-Path $sv 'SoaToolkit.config.example.psd1')) -match 'cloudsync-soa-toolkit 1\.3\.0\)') -and ([IO.File]::ReadAllText((Join-Path $sv 'README.md')) -match 'Status: 1\.3\.0 \(2026-02-02\)')) 'Set-SoaVersion.ps1 sets script help, configuration header and README status'
+Assert-Test ($clText -match ("(?s)## Unreleased\n\n## 1\.3\.0 $en 2026-02-02\n\n### Fixed\n\n- fix a\n\n## 1\.2\.3 ")) 'Set-SoaVersion.ps1 turns Unreleased into the version section and leaves an empty Unreleased'
+$newNotes = Join-Path $sv '.github\release-notes\v1.3.0.md'
+Assert-Test ((Test-Path $newNotes) -and ([IO.File]::ReadAllText($newNotes) -match '^<!-- title: v1\.3\.0') -and ([IO.File]::ReadAllText($newNotes) -match 'TODO-RELEASE-NOTES') -and ([IO.File]::ReadAllText($newNotes) -match 'blob/v1\.3\.0/README')) 'Set-SoaVersion.ps1 creates the release notes template (title line, TODO marker, footer)'
+& $exe -NoProfile -NonInteractive -File $setVersion -Version 1.3.0 -Date 2026-02-02 @svArgs *> $null
+Assert-Test ($LASTEXITCODE -eq 0 -and [IO.File]::ReadAllText((Join-Path $sv 'CHANGELOG.md')) -ceq $clText) 'Set-SoaVersion.ps1 repeated with the same version changes nothing'
+& $exe -NoProfile -NonInteractive -File $setVersion -Version 1.2.9 @svArgs *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Set-SoaVersion.ps1 refuses a lower version'
+& $exe -NoProfile -NonInteractive -File $setVersion -Version 1.4.0 @svArgs *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Set-SoaVersion.ps1 refuses an empty Unreleased section'
+
+# Release tooling: Test-SoaReleaseTag.ps1 against a local git repository (origin/main simulated with update-ref)
+$git = Get-Command git -ErrorAction SilentlyContinue
+if (-not $git) { Write-Host 'SKIP Test-SoaReleaseTag.ps1 tests (git not found)' -ForegroundColor DarkGray } else {
+    $rt = Join-Path $tmp 'releasetag'
+    New-Item -Path (Join-Path $rt 'scripts') -ItemType Directory -Force | Out-Null
+    New-Item -Path (Join-Path $rt '.github\release-notes') -ItemType Directory -Force | Out-Null
+    $id = @('-c', 'user.name=Release Test', '-c', 'user.email=release-test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false')
+    function Invoke-TestGit([string[]]$GitArgs) { $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'; try { & git -C $rt @id @GitArgs 2>&1 | Out-Null } finally { $ErrorActionPreference = $prev } }
+    function Write-RtFile([string]$Rel, [string[]]$Lines) { [IO.File]::WriteAllText((Join-Path $rt $Rel), (($Lines -join "`n") + "`n"), $utf8NoBom) }
+    Write-RtFile 'scripts\SoaToolkit.psm1' @("`$script:SoaVersion     = '1.3.0'", "`$script:SoaReleaseDate = '2026-02-02'")
+    Write-RtFile 'CHANGELOG.md' @('# Changelog', '', '## Unreleased', '', "## 1.3.0 $en 2026-02-02", '', '- fix a')
+    Write-RtFile '.github\release-notes\v1.3.0.md' @('<!-- title: v1.3.0 - test release -->', '', 'Notes.')
+    Invoke-TestGit @('init', '-q'); Invoke-TestGit @('add', '-A'); Invoke-TestGit @('commit', '-q', '-m', 'release')
+    Invoke-TestGit @('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    $tagTool = Join-Path (Join-Path $repo 'tools') 'Test-SoaReleaseTag.ps1'
+    $notesOut = Join-Path $tmp 'notes-out.md'
+    function Invoke-TagCheck([string[]]$Extra) { & $exe -NoProfile -NonInteractive -File $tagTool -Tag v1.3.0 -Root $rt -SkipReleaseCheck @Extra *> $null; $LASTEXITCODE }
+    Invoke-TestGit @('tag', '-a', 'v1.3.0', '-m', 'test')
+    Assert-Test ((Invoke-TagCheck @()) -eq 1) 'Test-SoaReleaseTag.ps1 fails on an unsigned tag'
+    Assert-Test ((Invoke-TagCheck @('-AllowUnsigned', '-NotesOut', $notesOut)) -eq 0 -and ([IO.File]::ReadAllText($notesOut) -match '^Notes\.')) 'Test-SoaReleaseTag.ps1 accepts an unsigned annotated tag with -AllowUnsigned and writes the notes without the title line'
+    & $exe -NoProfile -NonInteractive -Command "[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(850); & '$tagTool' -Tag v1.3.0 -Root '$rt' -SkipReleaseCheck -AllowUnsigned; exit `$LASTEXITCODE" *> $null
+    Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaReleaseTag.ps1 reads git output as UTF-8 also with an OEM console code page (850)'
+    Invoke-TestGit @('tag', '-d', 'v1.3.0'); Invoke-TestGit @('tag', 'v1.3.0')
+    Assert-Test ((Invoke-TagCheck @('-AllowUnsigned')) -eq 1) 'Test-SoaReleaseTag.ps1 fails on a lightweight tag'
+    Invoke-TestGit @('tag', '-d', 'v1.3.0')
+    Write-RtFile 'other.txt' @('not on main'); Invoke-TestGit @('add', '-A'); Invoke-TestGit @('commit', '-q', '-m', 'side')
+    Invoke-TestGit @('tag', '-a', 'v1.3.0', '-m', 'test')
+    Assert-Test ((Invoke-TagCheck @('-AllowUnsigned')) -eq 1) 'Test-SoaReleaseTag.ps1 fails when the tagged commit is not on main'
+    Invoke-TestGit @('tag', '-d', 'v1.3.0'); Invoke-TestGit @('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    # SSH-signed tags (PowerShell 7 only: Windows PowerShell 5.1 drops the empty passphrase argument of ssh-keygen)
+    $keygen = Get-Command ssh-keygen -ErrorAction SilentlyContinue
+    if (-not $keygen -or $PSVersionTable.PSEdition -eq 'Desktop') { Write-Host 'SKIP signed-tag tests (ssh-keygen not found or Windows PowerShell 5.1)' -ForegroundColor DarkGray } else {
+        $k1 = Join-Path $tmp 'sign1'; $k2 = Join-Path $tmp 'sign2'
+        foreach ($k in $k1, $k2) { & $keygen.Source -q -t ed25519 -N '' -C release-test -f $k 2>&1 | Out-Null }
+        Write-RtFile '.github\allowed_signers' @("release-test@example.invalid namespaces=`"git`" $((Get-Content "$k1.pub" -Raw).Trim())")
+        Invoke-TestGit @('add', '-A'); Invoke-TestGit @('commit', '-q', '-m', 'allowed signers'); Invoke-TestGit @('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        Invoke-TestGit @('-c', 'gpg.format=ssh', '-c', 'gpg.ssh.program=ssh-keygen', '-c', "user.signingkey=$k1", 'tag', '-s', 'v1.3.0', '-m', 'signed')
+        $signed = ((& git -C $rt cat-file tag v1.3.0) -join "`n") -match 'BEGIN SSH SIGNATURE'
+        if (-not $signed) { Write-Host 'SKIP signed-tag tests (git could not sign with ssh-keygen here)' -ForegroundColor DarkGray } else {
+            Assert-Test ((Invoke-TagCheck @()) -eq 0) 'Test-SoaReleaseTag.ps1 accepts a tag signed with a key from allowed_signers on main'
+            Invoke-TestGit @('tag', '-d', 'v1.3.0')
+            Invoke-TestGit @('-c', 'gpg.format=ssh', '-c', 'gpg.ssh.program=ssh-keygen', '-c', "user.signingkey=$k2", 'tag', '-s', 'v1.3.0', '-m', 'signed with another key')
+            Assert-Test ((Invoke-TagCheck @('-AllowUnsigned')) -eq 1) 'Test-SoaReleaseTag.ps1 fails on a signature by an unknown key, also with -AllowUnsigned'
+        }
+    }
+}
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 passes on the toolkit scripts and tools'
 
