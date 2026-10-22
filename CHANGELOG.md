@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 2.0.8 – 2026-10-22
+
+Fixes the report output of the monitor, which stopped the Verify step of `Install-SoaToolkit.ps1`, and adds a static check against the cause.
+
+### Fixed
+
+- **`Watch-CloudUserConformance.ps1 -Scope All` stopped with "Argument types do not match"** after the list of provisioned users - also as the last part of `Install-SoaToolkit.ps1 -Step Verify` and `-Step All` (affected: 2.0.5-2.0.7 in the code; older versions not checked).
+  - Cause: the array subexpression `@(...)` around a `System.Collections.Generic.List[object]` created with `New-Object` throws this exception in Windows PowerShell 5.1 and PowerShell 7 (reproduced with 7.4), also when the list arrives through a parameter. The monitor used `@($Results)` for its JSON report, and `ConvertTo-SoaHtmlTable` used `@($Rows)` for the HTML report.
+  - Effect: the CSV files were written, the JSON and HTML reports were not. `Export-SoaReport.ps1` found no monitor report for L5, L6, L18 and L20.
+  - The same expression made the **scheduled monitor** on every host (`-Scope Local`) fail silently when it saved `Status\monitor.json` (the error was caught). Its events (heartbeat, warnings, failures) were written; the status file was missing, so `Export-SoaReport.ps1` showed no scheduled monitor result for L18.
+  - Fix: `$Results.ToArray()` and `foreach ($r in $Rows)`. Deploy 2.0.8 to the hosts (`-Step DeployTasks`) so that the scheduled monitor writes its status again.
+  - The dry run in the lab first looked like a `-WhatIf` problem; it is not. The read-only scripts stay as in 2.0.6 and 2.0.7.
+
+### New
+
+- **`tools/Test-SoaScriptScope.ps1`, fourth check:** reports every `@($x)` in a script or module whose `$x` is assigned a `List[object]` in the same function or script. Run against 2.0.7, it reports the two lines in `Watch-CloudUserConformance.ps1`. A unit test covers `ConvertTo-SoaHtmlTable` with a `List[object]`.
+
 ## 2.0.7 – 2026-10-22
 
 Release process: one script sets the version, a workflow builds the asset from a checked tag and creates a draft release, and every build can be compared by its contents digest. The toolkit scripts are unchanged apart from their version line.

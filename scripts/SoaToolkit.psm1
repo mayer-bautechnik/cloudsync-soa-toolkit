@@ -22,7 +22,7 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.7'
+$script:SoaVersion     = '2.0.8'
 $script:SoaReleaseDate = '2026-10-22'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
@@ -458,7 +458,7 @@ function ConvertTo-SoaHtmlTable {
     [void]$sb.Append('<table><tr>')
     foreach ($p in $Properties) { [void]$sb.Append("<th>$([Net.WebUtility]::HtmlEncode($p))</th>") }
     [void]$sb.Append('</tr>')
-    foreach ($r in @($Rows)) {
+    foreach ($r in $Rows) {   # not @($Rows): @() around a List[object] from New-Object throws "Argument types do not match"
         $cls = if ($r.PSObject.Properties.Name -contains 'Status') { " class=`"$($r.Status)`"" } else { '' }
         [void]$sb.Append("<tr$cls>")
         foreach ($p in $Properties) { [void]$sb.Append('<td>{0}</td>' -f [Net.WebUtility]::HtmlEncode("$($r.$p)")) }

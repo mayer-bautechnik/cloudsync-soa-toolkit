@@ -278,6 +278,18 @@ Add-Content -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Value '$p = Start-
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
 Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on Start-Process in a script with -WhatIf'
 Remove-Item -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Force
+# @() around a List[object] throws "Argument types do not match" (2.0.7 lab: Watch-CloudUserConformance.ps1 report output)
+Set-Content -LiteralPath (Join-Path $scopeDir 'List.ps1') -Value @('$l = New-Object System.Collections.Generic.List[object]', '$a = @($l)')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on @() around a List[object]'
+Set-Content -LiteralPath (Join-Path $scopeDir 'List.ps1') -Value @('$l = New-Object System.Collections.Generic.List[object]', '$a = $l.ToArray()', '$b = @($l | Where-Object { $_ })', 'function Get-Other([object[]]$L) { @($L) }')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts ToArray(), a pipeline and the same name in another function'
+Remove-Item -LiteralPath (Join-Path $scopeDir 'List.ps1') -Force
+$htmlRows = New-Object System.Collections.Generic.List[object]
+$htmlRows.Add([pscustomobject]@{ Status = 'PASS'; Item = 'a' }); $htmlRows.Add([pscustomobject]@{ Status = 'WARN'; Item = 'b<c' })
+try { $html = ConvertTo-SoaHtmlTable -Rows $htmlRows -Properties @('Status', 'Item'); Assert-Test (([regex]::Matches($html, '<tr class=')).Count -eq 2 -and $html -match 'b&lt;c') 'ConvertTo-SoaHtmlTable accepts a List[object] (no @() around it)' }
+catch { Assert-Test $false "ConvertTo-SoaHtmlTable accepts a List[object] (no @() around it): $($_.Exception.Message)" }
 
 # Release tooling: Set-SoaVersion.ps1 on a fixture (no git, no GitHub, no PDF, no checks)
 $en = [char]0x2013

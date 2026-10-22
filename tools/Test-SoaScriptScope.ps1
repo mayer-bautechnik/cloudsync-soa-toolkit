@@ -5,8 +5,8 @@
 # Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 <#
 .SYNOPSIS
-    Static checks for three PowerShell scope pitfalls: overwritten script-level values, -WhatIf that does not reach the
-    toolkit module, and -WhatIf that suppresses local scratch files and run logs.
+    Static checks for PowerShell pitfalls: overwritten script-level values, -WhatIf that does not reach the toolkit
+    module, -WhatIf that suppresses local scratch files and run logs, and @() around a List[object].
 
 .DESCRIPTION
     PowerShell variable names are case-insensitive, and switch / foreach / if blocks do not open a new scope. A
@@ -37,6 +37,13 @@
     parameter in Windows PowerShell 5.1, so it belongs in a module function (Expand-SoaMsi). Not covered: splatted
     targets (@params) and child scripts called with & (they inherit $WhatIfPreference; Install-SoaToolkit.ps1 runs the
     read-only ones through Invoke-ReadOnlyScript).
+
+    Fourth check: the array subexpression @(...) around a System.Collections.Generic.List[object] created with
+    New-Object throws "Argument types do not match" in Windows PowerShell 5.1 and PowerShell 7 (observed with 7.4) -
+    also when the list arrives through a parameter or a property. (2.0.7 lab dry run: Watch-CloudUserConformance.ps1
+    stopped at @($Results).) Reported is every @($x) in a script or module whose $x is assigned a List[object] anywhere
+    in the same file. Use $x.ToArray(), foreach ($i in $x) or a pipeline (@($x | Where-Object ...)) instead. Not
+    covered: lists passed to a function and wrapped there (the unit tests cover ConvertTo-SoaHtmlTable).
 
 .PARAMETER Path
     Folders with scripts (default: ..\scripts and ..\tools). Module functions with SupportsShouldProcess are read from
@@ -187,9 +194,34 @@ foreach ($f in $files) {
 }
 
 Write-Host ("Script scope - {0} file(s), {1} module function(s) with ShouldProcess" -f $files.Count, $spFunctions.Count) -ForegroundColor Cyan
-$overwrite = $findings.Count - $whatIfFindings - $scratchFindings
+# @() around a List[object] (scripts and modules)
+function Get-EnclosingFunction($Ast) {
+    $p = $Ast.Parent
+    while ($p) { if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $p.Extent.StartOffset }; $p = $p.Parent }
+    -1
+}
+$listFindings = 0
+foreach ($f in @(foreach ($p in $Path) { Get-ChildItem -LiteralPath $p -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.ps1', '.psm1' } })) {
+    $lroot = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+    # name + enclosing function (or the file): the same name in another function is a different variable
+    $listVars = @($lroot.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and $a.Right.Extent.Text -match '(?i)Generic\.List\[(System\.)?object\]' }, $true) |
+        ForEach-Object { '{0}|{1}' -f (Get-EnclosingFunction $_), $_.Left.VariablePath.UserPath.ToLowerInvariant() } | Sort-Object -Unique)
+    if (-not $listVars.Count) { continue }
+    foreach ($ae in $lroot.FindAll({ param($x) $x -is [System.Management.Automation.Language.ArrayExpressionAst] }, $true)) {
+        $st = @($ae.SubExpression.Statements)
+        if ($st.Count -ne 1 -or $st[0] -isnot [System.Management.Automation.Language.PipelineAst] -or $st[0].PipelineElements.Count -ne 1) { continue }
+        $el = $st[0].PipelineElements[0]
+        if ($el -isnot [System.Management.Automation.Language.CommandExpressionAst] -or $el.Expression -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+        if ($listVars -notcontains ('{0}|{1}' -f (Get-EnclosingFunction $ae), $el.Expression.VariablePath.UserPath.ToLowerInvariant())) { continue }
+        $listFindings++
+        $findings.Add([pscustomobject]@{ File = $f.Name; Line = $ae.Extent.StartLineNumber; Text = ('{0} - @() around the List[object] ${1} throws "Argument types do not match"; use ${1}.ToArray() or foreach' -f $ae.Extent.Text, $el.Expression.VariablePath.UserPath) })
+    }
+}
+
+$overwrite = $findings.Count - $whatIfFindings - $scratchFindings - $listFindings
 Write-Host ("  [{0}] no script-level context value is overwritten" -f $(if ($overwrite) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($overwrite) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] -WhatIf is passed to every module function with ShouldProcess" -f $(if ($whatIfFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($whatIfFindings) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] local scratch files and run logs are written also during -WhatIf (no Start-Process in scripts)" -f $(if ($scratchFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($scratchFindings) { 'Red' } else { 'Green' })
+Write-Host ("  [{0}] no @() around a List[object] (throws 'Argument types do not match')" -f $(if ($listFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($listFindings) { 'Red' } else { 'Green' })
 foreach ($x in $findings) { Write-Host ("      {0}:{1} {2}" -f $x.File, $x.Line, $x.Text) -ForegroundColor Red }
 exit $(if ($findings.Count) { 1 } else { 0 })

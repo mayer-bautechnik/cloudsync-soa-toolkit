@@ -52,7 +52,7 @@
     .\Test-SoaPrerequisites.ps1 -EnforcementOnly -KirGpoName 'DC - KIR AD Object Enforcement'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.7 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
     Complements Microsoft's Check-CloudSyncSOAPolicy.ps1, which only reads the domain-wide objects and the local
     diagnostics value and does not verify the enforcement engine per DC (upstream finding F3).
     Run as Domain Admin from the admin workstation with RSAT. WinRM (5985) and ADWS (9389) to every writable DC.

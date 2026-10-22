@@ -35,7 +35,7 @@
     Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.7 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -561,7 +561,7 @@ if ($Scope -eq 'Local') {
     Write-SoaEvent -Id $EventId.MonitorHeartbeat -Level $(if ($overall -eq 'FAIL') { 'Error' } elseif ($overall -eq 'WARN') { 'Warning' } else { 'Information' }) `
         -Message ("SOA Toolkit monitor heartbeat: overall {0} ({1} FAIL, {2} WARN, {3} PASS, {4} INFO) - roles DC={5}, Agent={6}" -f $overall, $counts.FAIL, $counts.WARN, $counts.PASS, $counts.INFO, $hostsToCheck[0].IsDc, $hostsToCheck[0].IsAgent) `
         -Data @{ Overall = $overall; Counts = $counts; IsDc = $hostsToCheck[0].IsDc; IsAgent = $hostsToCheck[0].IsAgent; DomainChecks = $domainChecks } -LogName $cfg.EventLogName
-    try { Save-SoaStatus -DataPath $cfg.DataPath -Name 'monitor' -Status ([pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = @($Results) }) } catch { }
+    try { Save-SoaStatus -DataPath $cfg.DataPath -Name 'monitor' -Status ([pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = $Results.ToArray() }) } catch { }
 }
 
 if ($isInteractive) {
@@ -589,7 +589,8 @@ if ($Scope -eq 'All') {
     $stamp = Get-Date -Format 'yyyyMMdd_HHmm'
     $Results  | Export-Csv (Join-Path $OutputPath "monitor-checks_$stamp.csv") -NoTypeInformation -Encoding UTF8
     $userRows | Export-Csv (Join-Path $OutputPath "monitor-users_$stamp.csv") -NoTypeInformation -Encoding UTF8
-    [pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = @($Results); Users = @($userRows) } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutputPath "monitor_$stamp.json") -Encoding UTF8
+    # $Results.ToArray(), not @($Results): @() around a List[object] from New-Object throws "Argument types do not match"
+    [pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = $Results.ToArray(); Users = @($userRows) } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutputPath "monitor_$stamp.json") -Encoding UTF8
     if ($Html) {
         $body = "<h1>SOA Toolkit &ndash; monitoring ($($ctx.DnsRoot))</h1><p>Overall: <b>$overall</b> | FAIL $($counts.FAIL) | WARN $($counts.WARN) | Policy mode: <b>$(Get-SoaPolicyMode -Context $ctx -Server $server)</b> | Event window: ${EventHours} h | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm')</p>" +
                 '<h2>Checks</h2>' + (ConvertTo-SoaHtmlTable -Rows $Results -Properties @('Status', 'CheckId', 'Area', 'Item', 'Detail', 'Objects')) +

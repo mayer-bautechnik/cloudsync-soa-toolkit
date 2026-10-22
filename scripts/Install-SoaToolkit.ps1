@@ -61,7 +61,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.7 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
