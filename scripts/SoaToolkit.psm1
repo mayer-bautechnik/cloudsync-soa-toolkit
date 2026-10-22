@@ -22,7 +22,7 @@
 #>
 
 #region --- Constants --------------------------------------------------------------------------------
-$script:SoaVersion     = '2.0.8'
+$script:SoaVersion     = '2.1.0'
 $script:SoaReleaseDate = '2026-10-22'
 $script:SoaProduct     = 'cloudsync-soa-toolkit'
 $script:SoaTag         = '[SoaToolkit]'
@@ -101,6 +101,7 @@ function Get-SoaConstant([string]$Name) {
         'EventId'  { $script:SoaEventId }
         'KirKey'   { $script:SoaKirOverridesKey }
         'AgentService' { $script:SoaAgentService }
+        'CheckOrigin' { $script:SoaCheckOrigin }
         'Tag'      { $script:SoaTag }
         default    { throw "Unknown constant '$Name'." }
     }
@@ -433,7 +434,9 @@ function Set-SoaLineLog {
 function Write-SoaLine {
     param([ValidateSet('PASS', 'INFO', 'WARN', 'FAIL', 'ADD', 'SAME', 'DEL', 'SKIP')][string]$Status, [string]$Text)
     $map = @{ PASS = 'Green'; INFO = 'Gray'; WARN = 'Yellow'; FAIL = 'Red'; ADD = 'Green'; SAME = 'DarkGray'; DEL = 'Magenta'; SKIP = 'DarkGray' }
-    $sym = @{ PASS = '[PASS]'; INFO = '[INFO]'; WARN = '[WARN]'; FAIL = '[FAIL]'; ADD = '  +'; SAME = '  ='; DEL = '  -'; SKIP = '  ~' }
+    # Changes like a diff: + added (green), = unchanged (dark grey), - removed (magenta: an intended change, not an error,
+    # so not red). [SKIP] (dark grey) is no change - not '~', which other tools use for "changed in place".
+    $sym = @{ PASS = '[PASS]'; INFO = '[INFO]'; WARN = '[WARN]'; FAIL = '[FAIL]'; ADD = '  +'; SAME = '  ='; DEL = '  -'; SKIP = '[SKIP]' }
     Write-Host ('{0} {1}' -f $sym[$Status], $Text) -ForegroundColor $map[$Status]
     if ($script:SoaLineLog) {
         try { Add-Content -Path $script:SoaLineLog.Path -Value ('{0:s} {1} [{2}] {3}' -f (Get-Date), $script:SoaLineLog.Prefix, $Status, $Text) -Encoding UTF8 } catch { Write-Verbose "Run log write failed: $($_.Exception.Message)" }
@@ -452,14 +455,122 @@ function Get-SoaWorstStatus([string[]]$Statuses) {
 function Get-SoaStatusRank([string]$Status) { $script:SoaStatusRank[$Status] }
 function Get-SoaStatusColor([string]$Status) { $script:SoaColors[$Status] }
 
+<#
+    Where every check of Watch-CloudUserConformance.ps1 gets its target state from. Get-SoaCheckAssessment uses it to
+    classify a FAIL / WARN; docs/CHECKS.md shows the same table (the hygiene check H7 compares them).
+      Kind  Step      an Install-SoaToolkit.ps1 step creates it (Steps; Follow = what has to happen after the step)
+            FollowUp  it is reached after the installation without a further step (reconcile run, replication ...)
+            Prereq    a prerequisite outside the toolkit - fix it before the real run
+            Review    an operational finding - read the detail; it does not block the installation
+            Info      only PASS / INFO; Summary: summary line, assessed through its single checks
+      FailKind / WarnKind override Kind for that status. Fix: what to do; FailFix / WarnFix override it for that status.
+#>
+$script:SoaReconcile = 'first run of the reconcile task after DeployTasks (every ReconcileMinutes) or -Step Conform'
+$script:SoaCheckOrigin = [ordered]@{
+    'HOST-REACH'          = @{ Area = 'Host'; Kind = 'Prereq'; Fix = 'WinRM from this computer to the host (Test-WSMan with its name), name resolution, firewall' }
+    'HOST-READ'           = @{ Area = 'Host'; Kind = 'Info'; Fix = 'data that could not be read on the host - the detail names it' }
+    'TASK-READ'           = @{ Area = 'Host'; Kind = 'Info'; Fix = 'task list not readable with this identity' }
+    'TASK-MISSING'        = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks') }
+    'TASK-STATE'          = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks'); WarnKind = 'Review'; FailFix = 'task disabled - enable it or deploy again'; WarnFix = 'last result not OK - SoaToolkit event log and Status\*.json on the host' }
+    'RECON-STATUS'        = @{ Area = 'Host'; Kind = 'FollowUp'; FailKind = 'Review'; WarnFix = $script:SoaReconcile; FailFix = 'last reconcile run failed or is too old - Status\conformance.json and the SoaToolkit event log on the host' }
+    'CONF-ERRORS'         = @{ Area = 'Host'; Kind = 'Review'; Fix = 'conformance errors in the SoaToolkit event log (event 1002) - the detail shows the first ones' }
+    'EVENTLOG'            = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks') }
+    'EVENTLOG-SIZE'       = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks') }
+    'INTEGRITY'           = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks'); Fix = 'scripts missing or changed on the host - deploy again' }
+    'SIGNATURE'           = @{ Area = 'Host'; Kind = 'Step'; Steps = @('DeployTasks'); Fix = 'signing certificate trusted on the host (Trusted Publishers + root CA)?' }
+    'BATCH'               = @{ Area = 'Host'; Kind = 'Step'; Steps = @('BatchLogonGpo'); Follow = 'gpupdate /target:computer /force on the host (or -Refresh)' }
+    'DC-NTDSAI'           = @{ Area = 'Host (DC)'; Kind = 'Prereq'; Fix = 'install the Windows update with AD object enforcement (minimum ntdsai.dll per build: Test-SoaPrerequisites.ps1)' }
+    'DC-KIR'              = @{ Area = 'Host (DC)'; Kind = 'Step'; Steps = @('KirGpo'); Follow = 'SYSVOL replication, gpupdate and a restart of the DC (one DC at a time)' }
+    'DC-DIAG'             = @{ Area = 'Host (DC)'; Kind = 'Step'; Steps = @('DiagnosticsGpo'); Follow = 'gpupdate /target:computer /force on the DC' }
+    'DC-LOAD'             = @{ Area = 'Host (DC)'; Kind = 'FollowUp'; FailKind = 'Prereq'; WarnFix = 'no event 3095 yet - it appears after a policy change or a DC restart with diagnostics level 1'; FailFix = 'the DC fails to load CN=Cloud - read event 3095; do not switch to Enforced' }
+    'DC-3097'             = @{ Area = 'Host (DC)'; Kind = 'Review'; Fix = 'changes the Enforced mode would block - review them before -Step SetMode -Mode Enforced (Get-SoaEnforcementImpact.ps1)' }
+    'DC-3098'             = @{ Area = 'Host (DC)'; Kind = 'Review'; Fix = 'writes blocked by the Enforced mode - the detail shows samples' }
+    'DC-AUDIT'            = @{ Area = 'Host (DC)'; Kind = 'Step'; Steps = @('AuditConfig'); Follow = 'gpupdate /target:computer /force on the DC' }
+    'DC-KERB-*'           = @{ Area = 'Host (DC)'; Kind = 'Review'; Fix = 'Kerberos failures of cloud users on this DC - see the users' }
+    'AGENT-SVC'           = @{ Area = 'Host (agent)'; Kind = 'Prereq'; Fix = 'provisioning agent service AADConnectProvisioningAgent not installed or not running on a host listed in AgentHosts' }
+    'POL-EXISTS'          = @{ Area = 'Enforcement'; Kind = 'Step'; Steps = @('Policy') }
+    'POL-MODE'            = @{ Area = 'Enforcement'; Kind = 'Review'; Fix = 'keywords are neither Audit nor Enforced - -Step SetMode' }
+    'POL-SIDS'            = @{ Area = 'Enforcement'; Kind = 'Step'; Steps = @('AllowList'); Fix = 'stale SID in the allow-list - the policy fails to load' }
+    'POL-AGENT'           = @{ Area = 'Enforcement'; Kind = 'Step'; Steps = @('AllowList') }
+    'POL-TOOLKIT'         = @{ Area = 'Enforcement'; Kind = 'Step'; Steps = @('AllowList') }
+    'POL-REPL'            = @{ Area = 'Enforcement'; Kind = 'FollowUp'; Fix = 'AD replication of CN=Cloud - wait, then -Step Verify again' }
+    'ROLL'                = @{ Area = 'Password policy'; Kind = 'Step'; Steps = @('EnableRolling'); Fix = 'needs domain functional level 2016 or higher' }
+    'PSO-EXISTS'          = @{ Area = 'Password policy'; Kind = 'Step'; Steps = @('Pso') }
+    'PSO-VALUES'          = @{ Area = 'Password policy'; Kind = 'Step'; Steps = @('Pso') }
+    'PSO-MARKER'          = @{ Area = 'Password policy'; Kind = 'Info' }
+    'PSO-TARGET'          = @{ Area = 'Password policy'; Kind = 'Step'; Steps = @('Pso') }
+    'PSO-PREC'            = @{ Area = 'Password policy'; Kind = 'Review'; Fix = 'another PSO with the same or a lower precedence wins for the users it applies to' }
+    'OBJ-GMSA'            = @{ Area = 'Toolkit objects'; Kind = 'Step'; Steps = @('Gmsa') }
+    'OBJ-HOSTGROUP'       = @{ Area = 'Toolkit objects'; Kind = 'Step'; Steps = @('HostGroup') }
+    'OBJ-GROUPS'          = @{ Area = 'Toolkit objects'; Kind = 'Step'; Steps = @('Groups') }
+    'OBJ-GPO'             = @{ Area = 'Toolkit objects'; Kind = 'Step'; Steps = @('BatchLogonGpo', 'KirGpo', 'DiagnosticsGpo', 'AuditConfig') }
+    'GRP-DRIFT'           = @{ Area = 'Toolkit objects'; Kind = 'FollowUp'; Fix = "members out of scope are removed by the $script:SoaReconcile" }
+    'CKT-OBJECT'          = @{ Area = 'Cloud Kerberos Trust'; Kind = 'Prereq'; Fix = 'Cloud Kerberos Trust: create the AzureADKerberos object (Set-AzureADKerberosServer)' }
+    'CKT-KEYAGE'          = @{ Area = 'Cloud Kerberos Trust'; Kind = 'Review'; Fix = 'rotate the krbtgt_AzureAD key (Set-AzureADKerberosServer -RotateServerKey)' }
+    'PRV-UNMARKED'        = @{ Area = 'Provisioning'; Kind = 'Review'; Fix = 'provisioned objects without msDS-ObjectSoa - out of scope; check the Cloud Sync configuration' }
+    'USR-SUMMARY'         = @{ Area = 'Users'; Kind = 'Summary' }
+    'USR-UNMARKED'        = @{ Area = 'Users'; Kind = 'Review'; Fix = 'provisioned but not marked (msDS-ObjectSoa) - out of scope, not protected' }
+    'USR-EXCLUDED'        = @{ Area = 'Users'; Kind = 'Info' }
+    'USR-PILOT'           = @{ Area = 'Users'; Kind = 'Info' }
+    'USR-SCRIL'           = @{ Area = 'Users'; Kind = 'FollowUp'; Fix = $script:SoaReconcile }
+    'USR-PNE'             = @{ Area = 'Users'; Kind = 'FollowUp'; Fix = $script:SoaReconcile }
+    'USR-PSOGROUP'        = @{ Area = 'Users'; Kind = 'FollowUp'; Fix = $script:SoaReconcile }
+    'USR-EXPIRED-NOSCRIL' = @{ Area = 'Users'; Kind = 'FollowUp'; Fix = $script:SoaReconcile }
+    'USR-RPSO'            = @{ Area = 'Users'; Kind = 'Review'; Fix = 'another PSO applies to the user (precedence)' }
+    'USR-WRITE'           = @{ Area = 'Users'; Kind = 'Prereq'; Fix = 'user outside the write scope (WriteScope in the configuration) - the toolkit cannot correct it' }
+    'USR-LOCKED'          = @{ Area = 'Users'; Kind = 'Review'; Fix = 'account locked out - Kerberos sign-in blocked' }
+    'USR-NOROLL'          = @{ Area = 'Users'; Kind = 'Review'; Fix = 'sign-in while expired without rolling - check the DC (diagnostics, ntdsai.dll) and the user' }
+    'USR-ROLLPLS'         = @{ Area = 'Users'; Kind = 'Info' }
+    'USR-EXPIRED'         = @{ Area = 'Users'; Kind = 'Info' }
+    'USR-NEVERREVEAL'     = @{ Area = 'Users'; Kind = 'Prereq'; Fix = 'remove the group from the denied list of the AzureADKerberos password replication policy' }
+    'USR-KERB-*'          = @{ Area = 'Users'; Kind = 'Review'; Fix = 'Kerberos failures of this user - see docs/OPERATIONS.md' }
+    'AUD-SACL'            = @{ Area = 'Audit'; Kind = 'Step'; Steps = @('AuditConfig') }
+    'AUD-SACL-OTHER'      = @{ Area = 'Audit'; Kind = 'Info' }
+    'TEST'                = @{ Area = 'Validation tests'; Kind = 'Review'; Fix = 'results of Test-SoaBehavior.ps1 - repeat the test' }
+}
+
+<#
+    Assessment of one FAIL / WARN (nothing for PASS / INFO): Class and what to do.
+      PLANNED   a step of this run creates it (only with -PlannedSteps, i.e. in a dry run of Install-SoaToolkit.ps1)
+      ACTION    a toolkit step that is not part of this run creates it
+      FOLLOW-UP reached after the installation without a further step
+      REVIEW    operational finding - read the detail; it does not block the installation
+      BLOCKER   prerequisite outside the toolkit - fix it before the real run
+#>
+function Get-SoaCheckAssessment {
+    param([Parameter(Mandatory)][string]$CheckId, [string]$Status, [string[]]$PlannedSteps)
+    if ($Status -notin 'FAIL', 'WARN') { return $null }
+    $o = $script:SoaCheckOrigin[$CheckId]
+    if (-not $o) { foreach ($k in $script:SoaCheckOrigin.Keys) { if ($k.EndsWith('*') -and $CheckId -like $k) { $o = $script:SoaCheckOrigin[$k]; break } } }
+    if (-not $o) { return [pscustomobject]@{ Class = 'REVIEW'; Fix = 'check not classified - read the detail' } }
+    $kind = $o.Kind
+    if ($Status -eq 'FAIL' -and $o.FailKind) { $kind = $o.FailKind }
+    if ($Status -eq 'WARN' -and $o.WarnKind) { $kind = $o.WarnKind }
+    $fixText = if ($Status -eq 'FAIL' -and $o.FailFix) { $o.FailFix } elseif ($Status -eq 'WARN' -and $o.WarnFix) { $o.WarnFix } else { $o.Fix }
+    $then = if ($o.Follow) { "; then: $($o.Follow)" } else { '' }
+    $note = if ($fixText) { " ($fixText)" } else { '' }
+    switch ($kind) {
+        'Step' {
+            $steps = @($o.Steps)
+            $inRun = @($steps | Where-Object { @($PlannedSteps) -contains $_ })
+            if ($inRun.Count) { return [pscustomobject]@{ Class = 'PLANNED'; Fix = ('created by -Step {0} of this run{1}' -f ($inRun -join ', '), $then) } }
+            return [pscustomobject]@{ Class = 'ACTION'; Fix = ('Install-SoaToolkit.ps1 -Step {0}{1}{2}' -f ($steps -join ' / '), $then, $note) }
+        }
+        'FollowUp' { return [pscustomobject]@{ Class = 'FOLLOW-UP'; Fix = "$fixText" } }
+        'Prereq'   { return [pscustomobject]@{ Class = 'BLOCKER'; Fix = "$fixText" } }
+        'Review'   { return [pscustomobject]@{ Class = 'REVIEW'; Fix = "$fixText" } }
+        default    { return $null }
+    }
+}
+
 function ConvertTo-SoaHtmlTable {
-    param($Rows, [string[]]$Properties)
+    param($Rows, [string[]]$Properties, [string]$ClassProperty = 'Status')
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('<table><tr>')
     foreach ($p in $Properties) { [void]$sb.Append("<th>$([Net.WebUtility]::HtmlEncode($p))</th>") }
     [void]$sb.Append('</tr>')
     foreach ($r in $Rows) {   # not @($Rows): @() around a List[object] from New-Object throws "Argument types do not match"
-        $cls = if ($r.PSObject.Properties.Name -contains 'Status') { " class=`"$($r.Status)`"" } else { '' }
+        $cls = if ($r.PSObject.Properties.Name -contains $ClassProperty) { " class=`"$($r.$ClassProperty)`"" } else { '' }
         [void]$sb.Append("<tr$cls>")
         foreach ($p in $Properties) { [void]$sb.Append('<td>{0}</td>' -f [Net.WebUtility]::HtmlEncode("$($r.$p)")) }
         [void]$sb.Append('</tr>')
@@ -472,7 +583,7 @@ function Get-SoaHtmlStyle {
     '<style>body{font-family:Calibri,"Segoe UI",sans-serif;margin:24px;font-size:14px;color:#1b1b1b}h1,h2,h3{color:#1f3864}' +
     'table{border-collapse:collapse;margin-bottom:22px}th{background:#1f3864;color:#fff;padding:6px 10px;text-align:left}' +
     'td{border:1px solid #c8c8c8;padding:4px 10px;vertical-align:top}.PASS{background:#d4edda}.WARN{background:#fff3cd}' +
-    '.FAIL{background:#f8d7da}.INFO{background:#e7e9ec}.box{border-left:4px solid #1f3864;background:#eef2f8;padding:8px 14px;margin:8px 0 16px}</style>'
+    '.FAIL{background:#f8d7da}.INFO{background:#e7e9ec}.PEND{background:#d7f0f5}.PLAN{background:#e2f3e5}.box{border-left:4px solid #1f3864;background:#eef2f8;padding:8px 14px;margin:8px 0 16px}</style>'
 }
 #endregion
 

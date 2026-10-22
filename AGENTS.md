@@ -12,7 +12,7 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 | What was measured in a lab, when and how | [docs/EVIDENCE.md](docs/EVIDENCE.md) |
 | What still has to be verified (L1-L20) | [docs/VALIDATION.md](docs/VALIDATION.md) |
 | Security properties that must not break (S1-S7) | [SECURITY.md](SECURITY.md) |
-| Setup / operations | [docs/SETUP.md](docs/SETUP.md), [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| Setup / operations | [docs/SETUP.md](docs/SETUP.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), [docs/CHECKS.md](docs/CHECKS.md) (monitor checks) |
 | Reports and bug reports from an environment | [docs/REPORTING.md](docs/REPORTING.md) |
 | Releases and recurring maintenance | [docs/RELEASING.md](docs/RELEASING.md), [docs/GITHUB-SETTINGS.md](docs/GITHUB-SETTINGS.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md) |
 
@@ -29,23 +29,24 @@ PowerShell toolkit (Windows PowerShell 5.1 and PowerShell 7) for users that Micr
 
 1. **Security claims S1-S7** ([SECURITY.md](SECURITY.md)): the toolkit never requests password hashes or secret attributes, and it sets passwords only on the TestUser in the test paths. There are no network downloads and no dynamic code. Production writes go only to the documented objects and bits. `tools/Test-SoaSecurityClaims.ps1` must pass. If a change needs a new kind of write, update SECURITY.md and the checker in the same change.
 2. **Evidence levels.** *Documented* findings need a source with a retrieval date, *Observed* findings need a lab record in docs/EVIDENCE.md, and anything else is *Inferred*. Never upgrade a statement to *Observed* without lab data from the maintainer. Never invent lab results, dates or versions.
-3. **Every object the toolkit creates:**
+3. **Every monitor check** has an entry in the check origin table (`$script:SoaCheckOrigin` in `SoaToolkit.psm1`: where its target state comes from, what to do), and `docs/CHECKS.md` is regenerated with `tools/Export-SoaCheckTable.ps1 -Update`. H7 checks both.
+4. **Every object the toolkit creates:**
    - carries the marker (`Get-SoaMarker`);
    - is recorded in the manifest (`Set-SoaManifestEntry`);
    - has an uninstall step.
 
    ACEs and SACL entries are identified by their exact fingerprint (`Test-SoaSaclFingerprint`).
-4. **Idempotent and reversible.** Every write path supports `-WhatIf`, writes only on deviation and keeps the first previous value in the manifest. SCRIL is never removed automatically.
-5. **Scope.** Users are in scope only when they have the anchor `User_*` **and** `msDS-ObjectSoa = Cloud`. Non-LDAP and DC-internal write paths are out of scope (decision D-15).
-6. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses. Reports from environments enter the repository only as reviewed, anonymized `Export-SoaReport.ps1` output (docs/evidence/), never raw. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep their identifiers in `SoaToolkit.terms.txt` (git-ignored); the hygiene check H5 blocks them.
-7. **Conventions.**
+5. **Idempotent and reversible.** Every write path supports `-WhatIf`, writes only on deviation and keeps the first previous value in the manifest. SCRIL is never removed automatically.
+6. **Scope.** Users are in scope only when they have the anchor `User_*` **and** `msDS-ObjectSoa = Cloud`. Non-LDAP and DC-internal write paths are out of scope (decision D-15).
+7. **No environment data in the repository.** No real domain, host, user or company identifiers, no e-mail addresses. Reports from environments enter the repository only as reviewed, anonymized `Export-SoaReport.ps1` output (docs/evidence/), never raw. Use `contoso.com` in examples and `fabrikam.local` in test mocks. Maintainers keep their identifiers in `SoaToolkit.terms.txt` (git-ignored); the hygiene check H5 blocks them.
+8. **Conventions.**
    - Admin-facing text is English.
    - PowerShell files are UTF-8 with BOM and CRLF; Markdown, HTML, YAML and Python use LF.
    - Every source file carries the MPL-2.0 header.
    - Naming: `Soa*` = toolkit / infrastructure, `CloudUser*` = target state of users, approved verbs only.
    - Shared logic goes into `SoaToolkit.psm1`.
-   - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module. Conversely, inside the script `-WhatIf` does reach the built-in cmdlets: local scratch work the dry run needs itself (staging in `%TEMP%`, the run log) passes `-WhatIf:$false -Confirm:$false`, `Start-Process` belongs in a module function (PowerShell 7 honours `-WhatIf` there, 5.1 has no such parameter), and read-only child scripts run through `Invoke-ReadOnlyScript`.
-8. **One version, set by one script.** Changes go into `CHANGELOG.md` under `## Unreleased`; do not change the version in a normal change. Between releases `main` carries the last released version. At release time `tools/Set-SoaVersion.ps1` sets `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `Toolkit:` help line of every script in `scripts/` (only there - tools and tests carry no version), the configuration header, the README status line and the PDF keywords, and turns `## Unreleased` into the version section. `tools/Test-SoaRepoHygiene.ps1` checks the result (H6). A published version is never changed: fix forward with the next version ([docs/RELEASING.md](docs/RELEASING.md)).
+   - Scope pitfalls (checked by `tools/Test-SoaScriptScope.ps1`): variable names are case-insensitive and the steps of a script share one scope, so never reuse the name of a script-level value (`$cfg`, `$ctx`, `$KnownGuid` ...) for a loop or temporary variable; and always pass `-WhatIf:$WhatIfPreference` to module functions with `SupportsShouldProcess`, because preference variables do not reach a script module. Conversely, inside the script `-WhatIf` does reach the built-in cmdlets: local scratch work the dry run needs itself (staging in `%TEMP%`, the run log) passes `-WhatIf:$false -Confirm:$false`, `Start-Process` belongs in a module function (PowerShell 7 honours `-WhatIf` there, 5.1 has no such parameter), and read-only child scripts run through `Invoke-ReadOnlyScript`. Two more traps it reports: a variable that differs from a parameter only in case replaces that parameter (`param($P)` ... `$p = ...`), and `@()` around a `List[object]` created with `New-Object` throws "Argument types do not match" - use `.ToArray()` or `foreach`.
+9. **One version, set by one script.** Changes go into `CHANGELOG.md` under `## Unreleased`; do not change the version in a normal change. Between releases `main` carries the last released version. The version is set only after the maintainer has agreed on it. At release time `tools/Set-SoaVersion.ps1` sets `$script:SoaVersion` / `$script:SoaReleaseDate` in `SoaToolkit.psm1`, the `Toolkit:` help line of every script in `scripts/` (only there - tools and tests carry no version), the configuration header, the README status line and the PDF keywords, and turns `## Unreleased` into the version section. `tools/Test-SoaRepoHygiene.ps1` checks the result (H6). A published version is never changed: fix forward with the next version ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ## How to check a change
 

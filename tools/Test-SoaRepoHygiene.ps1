@@ -22,6 +22,8 @@
         every script in scripts\ (and of no file in tools\ or tests\ - they are not deployed), configuration header,
         README status, PDF keywords; CHANGELOG starts with '## Unreleased' and has '## <version> – <date>'; the
         release notes .github\release-notes\v<version>.md exist and contain no TODO-RELEASE-NOTES
+    H7  every check of Watch-CloudUserConformance.ps1 is in the check origin table of SoaToolkit.psm1, and the table in
+        docs/CHECKS.md is the one tools\Export-SoaCheckTable.ps1 writes from it
 
 .PARAMETER Root
     Repository root (default: parent of tools\).
@@ -113,9 +115,27 @@ if (Test-Path -LiteralPath $psm) {
     }
 }
 
+# H7 - monitor checks documented
+$watchFile = Join-Path (Join-Path $Root 'scripts') 'Watch-CloudUserConformance.ps1'
+$checksDoc = Join-Path (Join-Path $Root 'docs') 'CHECKS.md'
+$exporter  = Join-Path (Join-Path $Root 'tools') 'Export-SoaCheckTable.ps1'
+if ((Test-Path -LiteralPath $watchFile) -and (Test-Path -LiteralPath $exporter)) {
+    Import-Module (Join-Path (Join-Path $Root 'scripts') 'SoaToolkit.psm1') -DisableNameChecking -Force
+    $origin = Get-SoaConstant 'CheckOrigin'
+    $wt = Get-Content -LiteralPath $watchFile -Raw
+    $ids = @(@([regex]::Matches($wt, "Add-Result '([A-Z][A-Z0-9-]+)'") | ForEach-Object { $_.Groups[1].Value }) + @([regex]::Matches($wt, "'(USR-[A-Z][A-Z0-9-]*)'") | ForEach-Object { $_.Groups[1].Value }) +
+             @([regex]::Matches($wt, '"([A-Z]+-KERB-)\$\(') | ForEach-Object { $_.Groups[1].Value + '*' }) | Sort-Object -Unique)
+    foreach ($id in $ids) { if (-not $origin.Contains($id)) { Add-Finding 'H7' 'Watch-CloudUserConformance.ps1' "check $id is not in the check origin table (SoaToolkit.psm1)" } }
+    $want = (& $exporter) -join "`n"
+    $docText = if (Test-Path -LiteralPath $checksDoc) { [IO.File]::ReadAllText($checksDoc).Replace("`r`n", "`n") } else { '' }
+    $m = [regex]::Match($docText, '(?s)<!-- checks:begin -->\n(.*?)\n<!-- checks:end -->')
+    if (-not $m.Success) { Add-Finding 'H7' 'CHECKS.md' 'table markers missing' }
+    elseif ($m.Groups[1].Value -cne $want) { Add-Finding 'H7' 'CHECKS.md' 'table differs from the check origin table - .\tools\Export-SoaCheckTable.ps1 -Update' }
+}
+
 Write-Host ("Repository hygiene - {0} text file(s), {1} term(s) from SoaToolkit.terms.txt" -f $files.Count, $forbidden.Count) -ForegroundColor Cyan
 if (-not $forbidden.Count) { Write-Host '  (no SoaToolkit.terms.txt at the top level - H5 checks nothing; create it from SoaToolkit.terms.example.txt, it is git-ignored)' -ForegroundColor DarkGray }
-foreach ($id in 'H1', 'H2', 'H3', 'H4', 'H5', 'H6') {
+foreach ($id in 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7') {
     $x = @($findings | Where-Object { $_.Id -eq $id })
     Write-Host ("  [{0}] {1}" -f $(if ($x.Count) { 'FAIL' } else { 'PASS' }), $id) -ForegroundColor $(if ($x.Count) { 'Red' } else { 'Green' })
     foreach ($y in $x) { Write-Host ("      {0}: {1}" -f $y.File, $y.Text) -ForegroundColor Red }

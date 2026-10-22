@@ -32,10 +32,30 @@
     AzureADKerberos password replication policy), AzureADKerberos object and krbtgt_AzureAD key age,
     provisioned objects that are not marked.
 
-    Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors).
+    Assessment: every FAIL / WARN gets a class and what to do (Get-SoaCheckAssessment, table in docs/CHECKS.md):
+      BLOCKER   prerequisite outside the toolkit - fix it before the real run
+      ACTION    a toolkit step that is not part of this run creates it
+      REVIEW    operational finding - read it; it does not block the installation
+      FOLLOW-UP reached after the installation without a further step (reconcile run, replication, DC restart)
+      PLANNED   a step of this run creates it - only with -PlannedSteps (dry run of Install-SoaToolkit.ps1)
+    On the console, a FAIL / WARN of class FOLLOW-UP is shown as [PEND] (cyan, nothing to do now) and one of class
+    PLANNED as [PLAN] (green); CSV, JSON, events and the exit code keep FAIL / WARN.
+
+    The console ends with
+      Result: OK | PENDING | ATTENTION | ACTION REQUIRED      (for the reader, derived from the classes)
+              READY / NOT READY FOR THE REAL RUN              (with -PlannedSteps; not ready = at least one BLOCKER)
+      Monitoring status: PASS | INFO | WARN | FAIL            (worst raw status - exit code and events)
+    Signal words and colours: docs/CHECKS.md.
+
+    Exit code: 0 = OK / INFO, 1 = WARN, 2 = FAIL (Nagios convention - usable by script sensors). The assessment does
+    not change the status or the exit code.
+
+.PARAMETER PlannedSteps
+    Steps of an Install-SoaToolkit.ps1 dry run (-WhatIf) that calls this script in its Verify step. A FAIL / WARN that
+    one of these steps would fix is classified PLANNED instead of ACTION.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]
@@ -51,7 +71,9 @@ param(
 
     [string] $OutputPath,
 
-    [string] $ConfigPath
+    [string] $ConfigPath,
+
+    [string[]] $PlannedSteps
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,7 +150,7 @@ $hostBlock = {
     $o.EventLog = [Diagnostics.EventLog]::SourceExists($P.EventLog)
     $o.EventLogConfig = Get-SafeValue { $l = Get-WinEvent -ListLog $P.EventLog -ErrorAction Stop; [pscustomobject]@{ MaxBytes = [int64]$l.MaximumSizeInBytes; Mode = "$($l.LogMode)" } } 'event log size'
     $o.ConformanceErrors = @(Get-SafeValue { Get-WinEvent -FilterHashtable @{ LogName = $P.EventLog; Id = 1002; StartTime = (Get-Date).AddMilliseconds(-$P.SinceMs) } -ErrorAction Stop |
-        Select-Object -First 5 | ForEach-Object { ($_.Message -split "`r?`n")[0] } } 'event log')
+        Select-Object -First 5 | ForEach-Object { ($_.Message -split "`r?`n")[0] } } 'event log' | Where-Object { $_ })   # no events / no log: empty, not @($null)
     # Script integrity
     $o.Files = @(foreach ($f in @($P.Files)) {
         $path = Join-Path $P.InstallPath $f
@@ -154,8 +176,10 @@ $hostBlock = {
         $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides')
         if ($key) { foreach ($n in $key.GetValueNames()) { $ov[$n] = "$($key.GetValue($n))" }; $key.Close() }
         $o.KirOverrides = $ov
-        $p = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Diagnostics' -ErrorAction SilentlyContinue
-        $o.DiagLevel = $(if ($p -and ($p.PSObject.Properties.Name -contains '2 Security Events')) { [int]$p.'2 Security Events' } else { $null })
+        # $diag, not $p: variable names are case-insensitive, $p would replace the parameter $P (until 2.0.8: audit policy,
+        # 3097/3098 window, Kerberos failures and the agent service were never read on a DC)
+        $diag = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Diagnostics' -ErrorAction SilentlyContinue
+        $o.DiagLevel = $(if ($diag -and ($diag.PSObject.Properties.Name -contains '2 Security Events')) { [int]$diag.'2 Security Events' } else { $null })
         $ev = @(Get-SafeValue { Get-WinEvent -FilterHashtable @{ LogName = 'Directory Service'; Id = 3095, 3097, 3098; StartTime = (Get-Date).AddDays(-30) } -ErrorAction Stop } 'Directory Service log')
         $ld = $ev | Where-Object { $_.Id -eq 3095 } | Select-Object -First 1
         $o.LastLoadTime  = $(if ($ld) { $ld.TimeCreated } else { $null })
@@ -235,7 +259,8 @@ foreach ($h in $hostsToCheck) {
         } elseif ($t.State -eq 'Disabled') {
             Add-Result 'TASK-STATE' $area "Task $n" 'FAIL' 'task is DISABLED'
         } else {
-            Add-Result 'TASK-STATE' $area "Task $n" $(if ($okResult) { 'PASS' } else { 'WARN' }) ("state {0}, last run {1}, last result 0x{2:X}" -f $t.State, $t.LastRun, $t.LastResult)
+            $runText = if ($t.LastResult -eq 267011) { 'not run yet' } else { "last run {0}, last result 0x{1:X}" -f $t.LastRun, $t.LastResult }   # 0x41303 = has not run
+            Add-Result 'TASK-STATE' $area "Task $n" $(if ($okResult) { 'PASS' } else { 'WARN' }) ("state {0}, {1}" -f $t.State, $runText)
         }
     }
     if ($h.IsAgent -and [int]$cfg.ReconcileMinutes -gt 0) {
@@ -285,7 +310,7 @@ foreach ($h in $hostsToCheck) {
             $items = @($exp.Items)
             $missing = @(foreach ($it in $items) { if (-not $ov.ContainsKey("$($it.FeatureId)") -or "$($ov["$($it.FeatureId)"])" -ne "$($it.Enabled)") { "$($it.FeatureId)" } })
             if (-not $items.Count) { $missing = @(@($exp.FeatureIds) | Where-Object { -not $ov.ContainsKey("$_") }) }
-            Add-Result 'DC-KIR' $area 'KIR feature overrides' $(if ($missing.Count) { 'FAIL' } else { 'PASS' }) $(if ($missing.Count) { "not enabled: $($missing -join ', ') (GPO applied? DC restarted?)" } else { "all feature IDs of '$($exp.Gpo)' enabled" })
+            Add-Result 'DC-KIR' $area 'KIR feature overrides' $(if ($missing.Count) { 'FAIL' } else { 'PASS' }) $(if ($missing.Count) { "not enabled: $($missing -join ', ') (GPO applied? DC restarted?)" } else { "all feature IDs of '$(if ($exp.Gpo) { $exp.Gpo } else { $exp.Name })' enabled" })   # deployment.json: Gpo, manifest: Name
         } else {
             Add-Result 'DC-KIR' $area 'KIR feature overrides' 'INFO' ("expected IDs unknown (no KIR entry in deployment/manifest); overrides present: {0}" -f $(if ($ov -and $ov.Count) { ($ov.Keys | Sort-Object) -join ', ' } else { 'none' }))
         }
@@ -446,10 +471,12 @@ if ($domainChecks) {
         if ((Get-SoaStatusRank $Status) -gt (Get-SoaStatusRank $agg[$Id].Status)) { $agg[$Id].Status = $Status }
         $agg[$Id].Users.Add($User)
     }
+    $userView = @{}
     $userRows = foreach ($u in $users) {
         $c = Get-SoaUserConformance -User $u -Config $cfg -PsoMembers $psoMembers -ExcludeMembers $excluded -PilotMembers $pilot -WriteScope $(if ($scopeDns.Count) { $scopeDns } else { $null })
         $issues = New-Object System.Collections.Generic.List[string]
-        $add = { param($s, $t, $id) $issues.Add("[$s] $t"); if ((Get-SoaStatusRank $s) -gt (Get-SoaStatusRank $script:worstTmp)) { $script:worstTmp = $s }; Add-Agg $id $s $t $u.SamAccountName }
+        $issueView = New-Object System.Collections.Generic.List[object]   # console: status + class per issue (never @() around it)
+        $add = { param($s, $t, $id) $issues.Add("[$s] $t"); $ia = Get-SoaCheckAssessment -CheckId $id -Status $s -PlannedSteps $PlannedSteps; $issueView.Add([pscustomobject]@{ Status = $s; Class = $(if ($ia) { $ia.Class } else { '' }); Text = $t }); if ((Get-SoaStatusRank $s) -gt (Get-SoaStatusRank $script:worstTmp)) { $script:worstTmp = $s }; Add-Agg $id $s $t $u.SamAccountName }
         $script:worstTmp = 'PASS'
         $young = $u.whenCreated -gt (Get-Date).AddMinutes(-[int]$cfg.NewUserGraceMinutes)
         $ucc = [int]$u.'msDS-User-Account-Control-Computed'
@@ -489,6 +516,7 @@ if ($domainChecks) {
             if ($g.Name -eq '0x18') { $txt += ' (password attempts against a passwordless account - spraying?)' }
             & $add $sev $txt "USR-KERB-$($g.Name)"
         }
+        $userView[$u.SamAccountName] = $issueView
         [pscustomobject]@{
             Status = $script:worstTmp; User = $u.SamAccountName
             Origin = $(if ($md) { Get-SoaOriginKind -WhenCreated $u.whenCreated -AnchorTime $md.AnchorTime } else { 'unknown' })
@@ -547,6 +575,78 @@ if ($Scope -eq 'All') {
 }
 #endregion
 
+#region --- Assessment (class and what to do for every FAIL / WARN) ------------------------------------
+foreach ($r in $Results) {
+    $a = Get-SoaCheckAssessment -CheckId $r.CheckId -Status $r.Status -PlannedSteps $PlannedSteps
+    $r | Add-Member -NotePropertyName Class -NotePropertyValue $(if ($a) { $a.Class } else { '' }) -Force
+    $r | Add-Member -NotePropertyName Fix -NotePropertyValue $(if ($a) { $a.Fix } else { '' }) -Force
+}
+$classOrder = @('BLOCKER', 'ACTION', 'REVIEW', 'FOLLOW-UP', 'PLANNED')
+$classRank  = @{ BLOCKER = 5; ACTION = 4; REVIEW = 3; 'FOLLOW-UP' = 2; PLANNED = 1 }
+$classText  = @{ BLOCKER = 'prerequisite outside the toolkit - fix it before the real run'; ACTION = 'a toolkit step that is not part of this run creates it - run that step'
+                 REVIEW = 'finding to look at - it does not block the installation'; 'FOLLOW-UP' = 'nothing to do now - reached after the installation (reconcile run, restart, replication)'
+                 PLANNED = 'nothing to do - a step of this run creates it' }
+# Colours as usual: red = act now, yellow = look at it, cyan = wait, green = fine / will be created
+function Get-ClassColor([string]$Class, [string]$Status) {
+    switch ($Class) {
+        'BLOCKER'   { 'Red' }
+        'ACTION'    { 'Red' }
+        'REVIEW'    { if ($Status -eq 'FAIL') { 'Red' } else { 'Yellow' } }
+        'FOLLOW-UP' { 'Cyan' }
+        'PLANNED'   { 'Green' }
+        default     { 'Gray' }
+    }
+}
+# Console tag of an item: a FAIL / WARN that is only pending is shown as [PEND] (FOLLOW-UP) or [PLAN] (PLANNED). The
+# status itself (events, exit code, CSV / JSON / HTML) stays FAIL / WARN.
+function Get-ItemTag([string]$Status, [string]$Class) {
+    switch ($Class) {
+        'FOLLOW-UP' { [pscustomobject]@{ Tag = 'PEND'; Color = 'Cyan' } }
+        'PLANNED'   { [pscustomobject]@{ Tag = 'PLAN'; Color = 'Green' } }
+        default     { [pscustomobject]@{ Tag = $Status; Color = $(if ($Class) { Get-ClassColor $Class $Status } else { Get-SoaStatusColor $Status }) } }
+    }
+}
+# Tag of a user line: a FAIL / WARN without a class always shows as such; otherwise the worst class of its items decides
+function Get-UserTag([string]$Status, $Items) {
+    if ($Status -notin 'FAIL', 'WARN') { return (Get-ItemTag $Status '') }
+    $worst = $null
+    foreach ($i in $Items) {   # not @($Items): it is a List[object]
+        if ($i.Status -notin 'FAIL', 'WARN') { continue }
+        if (-not $i.Class) { return (Get-ItemTag $Status '') }
+        if (-not $worst -or $classRank[$i.Class] -gt $classRank[$worst.Class]) { $worst = $i }
+    }
+    if ($worst) { Get-ItemTag $Status $worst.Class } else { Get-ItemTag $Status '' }
+}
+# The user summary line takes the class of its worst user item (it is not counted itself)
+$sumItem = $Results | Where-Object { $_.CheckId -eq 'USR-SUMMARY' -and $_.Status -in 'FAIL', 'WARN' } | Select-Object -First 1
+$usrWorst = $Results | Where-Object { $_.CheckId -like 'USR-*' -and $_.CheckId -ne 'USR-SUMMARY' -and $_.Class } | Sort-Object { $classRank[$_.Class] } -Descending | Select-Object -First 1
+if ($sumItem -and $usrWorst) { $sumItem.Class = $usrWorst.Class; $sumItem.Fix = 'see the user items above' }
+$counted = @($Results | Where-Object { $_.Class -and $_.CheckId -ne 'USR-SUMMARY' })
+$classCounts = [ordered]@{}
+foreach ($c in $classOrder) { $classCounts[$c] = @($counted | Where-Object { $_.Class -eq $c }).Count }
+$readyForRun = if ($PlannedSteps) { $classCounts['BLOCKER'] -eq 0 } else { $null }
+
+# Result for the reader (the monitoring status below stays the worst raw status)
+# A FAIL / WARN without a class (kind Info) counts as such: FAIL to fix, WARN to look at
+$noClass  = @($Results | Where-Object { $_.Status -in 'FAIL', 'WARN' -and -not $_.Class -and $_.CheckId -ne 'USR-SUMMARY' })
+$toFix    = @($counted | Where-Object { $_.Class -in 'BLOCKER', 'ACTION' -or ($_.Class -eq 'REVIEW' -and $_.Status -eq 'FAIL') }) + @($noClass | Where-Object { $_.Status -eq 'FAIL' })
+$toReview = @($counted | Where-Object { $_.Class -eq 'REVIEW' -and $_.Status -ne 'FAIL' }) + @($noClass | Where-Object { $_.Status -eq 'WARN' })
+$waitFor  = @($counted | Where-Object { $_.Class -eq 'FOLLOW-UP' } | ForEach-Object { $_.Fix } | Select-Object -Unique)
+if ($PlannedSteps) {
+    $verdict = if ($readyForRun) { 'READY FOR THE REAL RUN' } else { 'NOT READY FOR THE REAL RUN' }
+    $verdictColor = if ($readyForRun) { 'Green' } else { 'Red' }
+    $verdictText = if ($readyForRun) { 'no BLOCKER' + $(if ($toFix.Count + $toReview.Count) { "; look at the $($toFix.Count + $toReview.Count) item(s) under 'To do'" } else { '' }) } else { "fix the $($classCounts['BLOCKER']) BLOCKER item(s) under 'To do' first" }
+} elseif ($toFix.Count) {
+    $verdict = 'ACTION REQUIRED'; $verdictColor = 'Red'; $verdictText = "$($toFix.Count) item(s) to fix - see 'To do'"
+} elseif ($toReview.Count) {
+    $verdict = 'ATTENTION'; $verdictColor = 'Yellow'; $verdictText = "$($toReview.Count) item(s) to look at - see 'To do'"
+} elseif ($waitFor.Count -or $classCounts['PLANNED']) {
+    $verdict = 'PENDING'; $verdictColor = 'Cyan'; $verdictText = 'nothing to do now - check again after: ' + ($waitFor -join '; ')
+} else {
+    $verdict = 'OK'; $verdictColor = 'Green'; $verdictText = 'all checks passed'
+}
+#endregion
+
 #region --- Output ----------------------------------------------------------------------------------
 $overall = Get-SoaWorstStatus (@($Results | ForEach-Object { $_.Status }))
 $counts = @{ PASS = @($Results | Where-Object { $_.Status -eq 'PASS' }).Count; INFO = @($Results | Where-Object { $_.Status -eq 'INFO' }).Count
@@ -565,21 +665,46 @@ if ($Scope -eq 'Local') {
 }
 
 if ($isInteractive) {
-    Write-SoaSection ("Result - {0} - scope {1} - overall {2}" -f $ctx.DnsRoot, $Scope, $overall)
+    Write-SoaSection ("Checks - {0} - scope {1}" -f $ctx.DnsRoot, $Scope)
+    Write-Host '[PASS] fine  [INFO] note  [WARN] warning  [FAIL] failed  [PEND] pending, nothing to do now  [PLAN] created by this run' -ForegroundColor DarkGray
     foreach ($area in ($Results | Select-Object -ExpandProperty Area -Unique)) {
         Write-Host ''
-        Write-Host $area -ForegroundColor Cyan
+        Write-Host $area -ForegroundColor White
         foreach ($r in ($Results | Where-Object { $_.Area -eq $area })) {
-            Write-Host ('  [{0}] {1,-40} {2}' -f $r.Status, $r.Item, $r.Detail) -ForegroundColor (Get-SoaStatusColor $r.Status)
+            $v = Get-ItemTag $r.Status $r.Class
+            Write-Host ('  [{0}] {1,-40} {2}' -f $v.Tag, $r.Item, $r.Detail) -ForegroundColor $v.Color
             if ($r.Objects -and $r.Status -ne 'PASS') { Write-Host "         $($r.Objects)" -ForegroundColor DarkGray }
+            if ($r.Class) { Write-Host ("         -> {0}{1}: {2}" -f $r.Class, $(if ($v.Tag -ne $r.Status) { " (status $($r.Status) until then)" } else { '' }), $r.Fix) -ForegroundColor (Get-ClassColor $r.Class $r.Status) }
         }
     }
     if ($userRows.Count) {
         Write-SoaSection 'Provisioned users'
         foreach ($u in $userRows) {
-            Write-Host ('[{0}] {1,-22} {2,-13} SCRIL={3,-5} PNE={4,-5} PSO={5,-5} expiry={6} secret={7} lastLogon={8}' -f $u.Status, $u.User, $u.Origin, $u.SCRIL, $u.PNE, $u.PsoGroup, $u.Expiry, $u.SecretChanged, $u.LastLogon) -ForegroundColor (Get-SoaStatusColor $u.Status)
-            if ($u.Issues) { Write-Host "      $($u.Issues)" -ForegroundColor (Get-SoaStatusColor $u.Status) }
+            $items = $userView[$u.User]
+            $v = Get-UserTag $u.Status $items
+            Write-Host ('[{0}] {1,-22} {2,-13} SCRIL={3,-5} PNE={4,-5} PSO={5,-5} expiry={6} secret={7} lastLogon={8}' -f $v.Tag, $u.User, $u.Origin, $u.SCRIL, $u.PNE, $u.PsoGroup, $u.Expiry, $u.SecretChanged, $u.LastLogon) -ForegroundColor $v.Color
+            if ($items) { foreach ($i in $items) { $iv = Get-ItemTag $i.Status $i.Class; Write-Host ("      [{0}] {1}" -f $iv.Tag, $i.Text) -ForegroundColor $iv.Color } }
         }
+    }
+    Write-SoaSection $(if ($PlannedSteps) { 'Assessment of the dry run' } else { 'Assessment' })
+    if ($PlannedSteps) { Write-Host ("Steps of this run: {0}" -f (@($PlannedSteps) -join ', ')) -ForegroundColor DarkGray }
+    foreach ($c in $classOrder) {
+        if ($c -eq 'PLANNED' -and -not $PlannedSteps) { continue }
+        $col = if (-not $classCounts[$c]) { 'DarkGray' } elseif ($c -eq 'REVIEW') { if ($toFix | Where-Object { $_.Class -eq 'REVIEW' }) { 'Red' } else { 'Yellow' } } else { Get-ClassColor $c '' }
+        Write-Host ("  {0,-10} {1,3}  {2}" -f $c, $classCounts[$c], $classText[$c]) -ForegroundColor $col
+    }
+    $todo = @($counted | Where-Object { $_.Class -in 'BLOCKER', 'ACTION', 'REVIEW' } | Sort-Object { $classRank[$_.Class] } -Descending)
+    if ($todo.Count) {
+        Write-Host ''; Write-Host 'To do:' -ForegroundColor White
+        foreach ($r in $todo) { Write-Host ("  [{0}] {1} - {2}: {3}" -f $r.Class, $r.Area, $r.Item, $r.Fix) -ForegroundColor (Get-ClassColor $r.Class $r.Status) }
+    }
+    if ($noClass.Count) {
+        if (-not $todo.Count) { Write-Host ''; Write-Host 'To do:' -ForegroundColor White }
+        foreach ($r in $noClass) { Write-Host ("  [{0}] {1} - {2}: {3}" -f $r.Status, $r.Area, $r.Item, $r.Detail) -ForegroundColor (Get-SoaStatusColor $r.Status) }
+    }
+    if ($waitFor.Count) {
+        Write-Host ''; Write-Host $(if ($PlannedSteps) { 'After the real run (nothing to do now):' } else { 'Waiting for (nothing to do now):' }) -ForegroundColor Cyan
+        foreach ($t in $waitFor) { Write-Host "  - $t" -ForegroundColor Cyan }
     }
 }
 
@@ -590,17 +715,28 @@ if ($Scope -eq 'All') {
     $Results  | Export-Csv (Join-Path $OutputPath "monitor-checks_$stamp.csv") -NoTypeInformation -Encoding UTF8
     $userRows | Export-Csv (Join-Path $OutputPath "monitor-users_$stamp.csv") -NoTypeInformation -Encoding UTF8
     # $Results.ToArray(), not @($Results): @() around a List[object] from New-Object throws "Argument types do not match"
-    [pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = $Results.ToArray(); Users = @($userRows) } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutputPath "monitor_$stamp.json") -Encoding UTF8
+    [pscustomobject]@{ Time = (Get-Date).ToString('s'); Overall = $overall; Counts = $counts; Results = $Results.ToArray(); Users = @($userRows)
+        Assessment = [pscustomobject]@{ Result = $verdict; PlannedSteps = @($PlannedSteps | Where-Object { $_ }); Classes = $classCounts; ReadyForRealRun = $readyForRun } } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutputPath "monitor_$stamp.json") -Encoding UTF8
     if ($Html) {
-        $body = "<h1>SOA Toolkit &ndash; monitoring ($($ctx.DnsRoot))</h1><p>Overall: <b>$overall</b> | FAIL $($counts.FAIL) | WARN $($counts.WARN) | Policy mode: <b>$(Get-SoaPolicyMode -Context $ctx -Server $server)</b> | Event window: ${EventHours} h | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm')</p>" +
-                '<h2>Checks</h2>' + (ConvertTo-SoaHtmlTable -Rows $Results -Properties @('Status', 'CheckId', 'Area', 'Item', 'Detail', 'Objects')) +
-                '<h2>Provisioned users</h2>' + (ConvertTo-SoaHtmlTable -Rows $userRows -Properties @('Status', 'User', 'Origin', 'Enabled', 'SCRIL', 'PNE', 'PsoGroup', 'Expiry', 'SecretChanged', 'LastLogon', 'Issues'))
+        # Rows are coloured like the console: [PEND] cyan, [PLAN] green, REVIEW of a WARN yellow, everything else by status
+        $css = @{ Red = 'FAIL'; Yellow = 'WARN'; Cyan = 'PEND'; Green = 'PASS'; Gray = 'INFO'; DarkGray = 'INFO' }
+        $htmlChecks = foreach ($r in $Results) { $t = Get-ItemTag $r.Status $r.Class; $r | Select-Object @{ n = 'Shown'; e = { $t.Tag } }, *, @{ n = 'Css'; e = { $css[$t.Color] } } }
+        $htmlUsers  = foreach ($u in $userRows) { $t = Get-UserTag $u.Status $userView[$u.User]; $u | Select-Object @{ n = 'Shown'; e = { $t.Tag } }, *, @{ n = 'Css'; e = { $css[$t.Color] } } }
+        $body = "<h1>SOA Toolkit &ndash; monitoring ($($ctx.DnsRoot))</h1><table><tr class=`"$($css[$verdictColor])`"><td>Result: <b>$verdict</b> &ndash; $([Net.WebUtility]::HtmlEncode($verdictText))</td></tr></table><p>Monitoring status: $overall | FAIL $($counts.FAIL) | WARN $($counts.WARN) | Policy mode: <b>$(Get-SoaPolicyMode -Context $ctx -Server $server)</b> | Event window: ${EventHours} h | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm')</p>" +
+                ('<p>Assessment: {0}{1}</p>' -f (($classOrder | Where-Object { $_ -ne 'PLANNED' -or $PlannedSteps } | ForEach-Object { "$_ $($classCounts[$_])" }) -join ' | '), $(if ($PlannedSteps) { " (dry run of $([Net.WebUtility]::HtmlEncode((@($PlannedSteps) -join ', '))))" } else { '' })) +
+                '<h2>Checks</h2>' + (ConvertTo-SoaHtmlTable -Rows $htmlChecks -ClassProperty Css -Properties @('Shown', 'Status', 'CheckId', 'Area', 'Item', 'Detail', 'Objects', 'Class', 'Fix')) +
+                '<h2>Provisioned users</h2>' + (ConvertTo-SoaHtmlTable -Rows $htmlUsers -ClassProperty Css -Properties @('Shown', 'Status', 'User', 'Origin', 'Enabled', 'SCRIL', 'PNE', 'PsoGroup', 'Expiry', 'SecretChanged', 'LastLogon', 'Issues'))
         $htmlPath = Join-Path $OutputPath "monitor_$stamp.html"
         ConvertTo-Html -Head (Get-SoaHtmlStyle) -Body $body -Title 'SOA Toolkit monitoring' | Set-Content -Path $htmlPath -Encoding UTF8
-        Write-Host "Report: $htmlPath" -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host "Report: $htmlPath" -ForegroundColor Gray
         Write-Host "        (contains names of your environment - share it only through Export-SoaReport.ps1)" -ForegroundColor DarkGray
     }
 }
-if ($isInteractive) { Write-Host ''; Write-Host ("Overall: {0}" -f $overall) -ForegroundColor (Get-SoaStatusColor $overall) }
+if ($isInteractive) {
+    Write-Host ''
+    Write-Host ("Result: {0} - {1}" -f $verdict, $verdictText) -ForegroundColor $verdictColor
+    Write-Host ("Monitoring status: {0} (worst status of all checks; exit code {1}, used by the events and by script sensors)" -f $overall, (Get-SoaStatusRank $overall)) -ForegroundColor DarkGray
+}
 exit (Get-SoaStatusRank $overall)
 #endregion

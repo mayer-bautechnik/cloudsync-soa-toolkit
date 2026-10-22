@@ -6,7 +6,8 @@
 <#
 .SYNOPSIS
     Static checks for PowerShell pitfalls: overwritten script-level values, -WhatIf that does not reach the toolkit
-    module, -WhatIf that suppresses local scratch files and run logs, and @() around a List[object].
+    module, -WhatIf that suppresses local scratch files and run logs, @() around a List[object], and parameters that a
+    variable of the same name in other case overwrites.
 
 .DESCRIPTION
     PowerShell variable names are case-insensitive, and switch / foreach / if blocks do not open a new scope. A
@@ -41,9 +42,17 @@
     Fourth check: the array subexpression @(...) around a System.Collections.Generic.List[object] created with
     New-Object throws "Argument types do not match" in Windows PowerShell 5.1 and PowerShell 7 (observed with 7.4) -
     also when the list arrives through a parameter or a property. (2.0.7 lab dry run: Watch-CloudUserConformance.ps1
-    stopped at @($Results).) Reported is every @($x) in a script or module whose $x is assigned a List[object] anywhere
-    in the same file. Use $x.ToArray(), foreach ($i in $x) or a pipeline (@($x | Where-Object ...)) instead. Not
+    stopped at @($Results).) Reported is every @($x) in a script or module whose $x is assigned a List[object] directly
+    ($x = New-Object ... / [...]::new()) in the same function or file - not the output of a loop that creates lists
+    inside. Use $x.ToArray(), foreach ($i in $x) or a pipeline (@($x | Where-Object ...)) instead. Not
     covered: lists passed to a function and wrapped there (the unit tests cover ConvertTo-SoaHtmlTable).
+
+    Fifth check: a parameter that a variable of the same name in other case overwrites in the same scope - in a function,
+    a script or a stored script block (param($P) ... $p = ...; foreach ($p in ...)). Variable names are case-insensitive,
+    so this replaces the parameter. (2.0.8: $p = Get-ItemProperty ... in the host block of Watch-CloudUserConformance.ps1
+    replaced its parameter $P, and the audit policy, the event window, the Kerberos failures and the agent service were
+    never read on a DC.) A deliberate reassignment with the same spelling ($ConfigPath = Resolve-... $ConfigPath) is
+    allowed.
 
 .PARAMETER Path
     Folders with scripts (default: ..\scripts and ..\tools). Module functions with SupportsShouldProcess are read from
@@ -204,7 +213,7 @@ $listFindings = 0
 foreach ($f in @(foreach ($p in $Path) { Get-ChildItem -LiteralPath $p -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.ps1', '.psm1' } })) {
     $lroot = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
     # name + enclosing function (or the file): the same name in another function is a different variable
-    $listVars = @($lroot.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and $a.Right.Extent.Text -match '(?i)Generic\.List\[(System\.)?object\]' }, $true) |
+    $listVars = @($lroot.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and $a.Right -is [System.Management.Automation.Language.PipelineAst] -and $a.Right.PipelineElements.Count -eq 1 -and $a.Right.Extent.Text -match '(?i)Generic\.List\[(System\.)?object\]' }, $true) |
         ForEach-Object { '{0}|{1}' -f (Get-EnclosingFunction $_), $_.Left.VariablePath.UserPath.ToLowerInvariant() } | Sort-Object -Unique)
     if (-not $listVars.Count) { continue }
     foreach ($ae in $lroot.FindAll({ param($x) $x -is [System.Management.Automation.Language.ArrayExpressionAst] }, $true)) {
@@ -218,10 +227,54 @@ foreach ($f in @(foreach ($p in $Path) { Get-ChildItem -LiteralPath $p -File -Er
     }
 }
 
-$overwrite = $findings.Count - $whatIfFindings - $scratchFindings - $listFindings
+# Parameters overwritten by a variable of the same name in other case (scripts and modules)
+$paramFindings = 0
+function Get-ScopeOwner($Ast) {
+    $p = $Ast.Parent
+    while ($p) {
+        if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $p }
+        if ($p -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+            $cmd = $p.Parent
+            $inCaller = ($cmd -is [System.Management.Automation.Language.CommandAst]) -and ($cmd.GetCommandName() -in 'ForEach-Object', 'Where-Object', '%', '?', 'foreach', 'where')
+            if (-not $inCaller) { return $p }
+        }
+        if (-not $p.Parent) { return $p }
+        $p = $p.Parent
+    }
+    $Ast
+}
+foreach ($f in @(foreach ($pp in $Path) { Get-ChildItem -LiteralPath $pp -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.ps1', '.psm1' } })) {
+    $proot = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+    $owners = @{}   # scope owner -> parameter names
+    foreach ($fd in $proot.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        $names = @(@($fd.Parameters) + @(if ($fd.Body.ParamBlock) { $fd.Body.ParamBlock.Parameters }) | Where-Object { $_ } | ForEach-Object { $_.Name.VariablePath.UserPath })
+        if ($names.Count) { $owners[$fd] = $names }
+    }
+    foreach ($sb in $proot.FindAll({ param($x) $x -is [System.Management.Automation.Language.ScriptBlockAst] -and $x.ParamBlock -and -not ($x.Parent -is [System.Management.Automation.Language.FunctionDefinitionAst]) }, $true)) {
+        $owner = if ($sb.Parent) { $sb.Parent } else { $sb }
+        $owners[$owner] = @($sb.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+    }
+    if (-not $owners.Count) { continue }
+    $writes = @($proot.FindAll({ param($x) ($x -is [System.Management.Automation.Language.AssignmentStatementAst] -and $x.Left -is [System.Management.Automation.Language.VariableExpressionAst]) -or $x -is [System.Management.Automation.Language.ForEachStatementAst] }, $true))
+    foreach ($w in $writes) {
+        $var = if ($w -is [System.Management.Automation.Language.ForEachStatementAst]) { $w.Variable } else { $w.Left }
+        $name = $var.VariablePath.UserPath
+        $owner = Get-ScopeOwner $w
+        if (-not $owners.ContainsKey($owner)) { continue }
+        foreach ($pn in $owners[$owner]) {
+            if ($pn -ieq $name -and $pn -cne $name) {
+                $paramFindings++
+                $findings.Add([pscustomobject]@{ File = $f.Name; Line = $w.Extent.StartLineNumber; Text = ('${0} replaces the parameter ${1} of the same scope (variable names are case-insensitive) - rename the variable' -f $name, $pn) })
+            }
+        }
+    }
+}
+
+$overwrite = $findings.Count - $whatIfFindings - $scratchFindings - $listFindings - $paramFindings
 Write-Host ("  [{0}] no script-level context value is overwritten" -f $(if ($overwrite) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($overwrite) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] -WhatIf is passed to every module function with ShouldProcess" -f $(if ($whatIfFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($whatIfFindings) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] local scratch files and run logs are written also during -WhatIf (no Start-Process in scripts)" -f $(if ($scratchFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($scratchFindings) { 'Red' } else { 'Green' })
 Write-Host ("  [{0}] no @() around a List[object] (throws 'Argument types do not match')" -f $(if ($listFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($listFindings) { 'Red' } else { 'Green' })
+Write-Host ("  [{0}] no parameter is replaced by a variable of the same name in other case" -f $(if ($paramFindings) { 'FAIL' } else { 'PASS' })) -ForegroundColor $(if ($paramFindings) { 'Red' } else { 'Green' })
 foreach ($x in $findings) { Write-Host ("      {0}:{1} {2}" -f $x.File, $x.Line, $x.Text) -ForegroundColor Red }
 exit $(if ($findings.Count) { 1 } else { 0 })

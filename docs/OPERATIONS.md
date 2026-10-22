@@ -212,6 +212,8 @@ The local log is also the buffer for forwarding: events that are overwritten bef
 
 ### Check catalogue (selection)
 
+The complete list with the origin of every check and how a FAIL / WARN is assessed: [CHECKS.md](CHECKS.md).
+
 | CheckId | Meaning |
 |---|---|
 | `DC-NTDSAI`, `DC-KIR`, `DC-DIAG`, `DC-LOAD`, `DC-3097`, `DC-3098`, `DC-AUDIT` | enforcement engine and logging per DC |
@@ -224,6 +226,8 @@ The local log is also the buffer for forwarding: events that are overwritten bef
 | `USR-SCRIL`, `USR-PNE`, `USR-PSOGROUP`, `USR-RPSO`, `USR-WRITE`, `USR-LOCKED`, `USR-NOROLL`, `USR-ROLLPLS`, `USR-EXPIRED`, `USR-KERB-0x17/0x12/0x18`, `USR-NEVERREVEAL`, `USR-UNMARKED` | per-user evaluation |
 | `CKT-OBJECT`, `CKT-KEYAGE` | Cloud Kerberos Trust |
 | `TEST` | latest results of `Test-SoaBehavior.ps1` (interactive scope) |
+
+Every FAIL / WARN also gets a class (BLOCKER, ACTION, REVIEW, FOLLOW-UP, PLANNED) and what to do - console, CSV, JSON and HTML of `-Scope All`. Where each check gets its target state from: [CHECKS.md](CHECKS.md).
 
 The scheduled monitor runs as the gMSA, which is not a local administrator. Checks that need administrative rights (effective audit policy, effective batch logon right, SACLs - reading a SACL needs "Manage auditing and security log") are performed by the interactive `-Scope All` run and by `Install-SoaToolkit.ps1 -Step Verify`. Run one of them regularly (e.g. after changes to OUs or audit settings).
 

@@ -37,6 +37,12 @@
 .PARAMETER SkipCiCheck
     Do not ask GitHub for the CI result of the commit. Only when the GitHub CLI is not available - verify CI manually.
 
+.PARAMETER Unreleased
+    Package a state whose version has not been agreed yet (changes under '## Unreleased'), for a lab test. The name is
+    cloudsync-soa-toolkit-unreleased-<yyyyMMdd-HHmm>.zip, so it can never be mistaken for the published asset of the
+    version it still carries inside (the last released one). Identify it by its contents digest. Never attach it to a
+    release.
+
 .NOTES
     Run tools\Invoke-SoaStaticChecks.ps1 first. See docs/RELEASING.md.
 #>
@@ -44,7 +50,8 @@
 param(
     [string] $Ref = 'HEAD',
     [string] $OutputPath,
-    [switch] $SkipCiCheck
+    [switch] $SkipCiCheck,
+    [switch] $Unreleased
 )
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }   # $PSScriptRoot can be empty in Windows PowerShell 5.1 (-File)
@@ -98,7 +105,7 @@ if ($inGit) {
 $psmText = Get-Content -LiteralPath (Join-Path (Join-Path $top 'scripts') 'SoaToolkit.psm1') -Raw
 $version = if ($psmText -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
 $releaseDate = if ($psmText -match "\`$script:SoaReleaseDate\s*=\s*'(\d{4}-\d{2}-\d{2})'") { [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } else { throw 'release date not found in SoaToolkit.psm1' }
-$name = "cloudsync-soa-toolkit-$version"
+$name = if ($Unreleased) { 'cloudsync-soa-toolkit-unreleased-{0:yyyyMMdd-HHmm}' -f (Get-Date) } else { "cloudsync-soa-toolkit-$version" }
 
 # SHA256SUMS.txt
 $sums = foreach ($f in (Get-ChildItem -LiteralPath $top -Recurse -File -Force | Sort-Object FullName)) {

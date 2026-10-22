@@ -37,7 +37,7 @@
             behavior-findings.json and behavior-report.html
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
     Run as Domain Admin from the admin workstation (RSAT). WinRM to the DCs and agent hosts.
 #>
 [CmdletBinding()]
@@ -448,7 +448,7 @@ foreach ($current in ($suiteOrder | Where-Object { $Suite -contains $_ })) {
             $dn = $bl.Dn; $exp = [datetime]$bl.ExpectedExpiry
             Write-SoaSection "RollingObserve on '$($bl.Sam)' - expected expiry $(Format-Time $exp)"
             if ((Get-Date) -lt $exp) {
-                if (-not $WaitForExpiry) { Write-Host ("Not expired yet ({0:N0} min left). Re-run later or use -WaitForExpiry." -f ($exp - (Get-Date)).TotalMinutes) -ForegroundColor Yellow; break }
+                if (-not $WaitForExpiry) { Write-Host ("Not expired yet ({0:N0} min left). Re-run later or use -WaitForExpiry." -f ($exp - (Get-Date)).TotalMinutes) -ForegroundColor Cyan; break }
                 while ((Get-Date) -lt $exp.AddMinutes(1)) { Write-Host ("  waiting for expiry: {0:N0} min left" -f [Math]::Max(0, ($exp.AddMinutes(1) - (Get-Date)).TotalMinutes)); Start-Sleep -Seconds 60 }
             }
             $atExpiry = Get-Snapshot $dn

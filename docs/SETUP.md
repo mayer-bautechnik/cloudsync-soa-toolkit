@@ -102,6 +102,10 @@ In a small domain the admin scripts can run directly on a domain controller or a
 
 All steps are idempotent and support `-WhatIf`. Run each step with `-WhatIf` first.
 
+The dry run ends with the Verify step, which shows the current state - most of what the installation creates does not exist yet, so FAIL lines are expected. Read the section **Assessment of the dry run** at the end: every FAIL / WARN is classified as PLANNED (this run creates it), FOLLOW-UP (reached after the run, for example by the first reconcile run or a DC restart), REVIEW, ACTION or BLOCKER, and the result line says **READY FOR THE REAL RUN** or **NOT READY FOR THE REAL RUN**. Only BLOCKER items stop you. After the real run, the result is typically **PENDING** (cyan, nothing to do now) until the reconcile task has run. Details, the table of all checks and the meaning of all signal words and colours: [CHECKS.md](CHECKS.md).
+
+Without `-WhatIf`, `Install-SoaToolkit.ps1` asks for confirmation before changes with a high impact (for example the KIR registry value in the GPO): answer `Y` (yes) or `A` (yes to all). For an unattended run add `-Confirm:$false`.
+
 ```powershell
 cd .\scripts
 .\Test-SoaPrerequisites.ps1                                    # read-only; fix FAILs first

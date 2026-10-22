@@ -82,7 +82,7 @@
     .\Export-SoaReport.ps1 -Package 'C:\SoaToolkitAdmin\Reports\Export\SoaReport_Validation_20261121_093015'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
     Run as Domain Admin from the admin workstation (RSAT, WinRM to the toolkit hosts). See docs/REPORTING.md.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Collect', SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -510,7 +510,8 @@ if ($back) {
 if ($monitor) {
     $hostMon = @($hosts | Where-Object { $_.Ok -and $_.Data.Status.Monitor } | ForEach-Object { $m = $_.Data.Status.Monitor | ConvertFrom-Json; [pscustomobject]@{ Host = $_.Host; Status = $m.Overall; Time = $m.Time } })
     $s = Get-SoaWorstStatus (@($monitor.Overall) + @($hostMon | ForEach-Object { $_.Status }))
-    Set-L 'L18' $s ("interactive: {0} (FAIL {1}, WARN {2}); scheduled monitor on {3} host(s)" -f $monitor.Overall, $monitor.Counts.FAIL, $monitor.Counts.WARN, $hostMon.Count) (@($monAge) + @($hostMon | ForEach-Object { "scheduled monitor $($_.Host): $($_.Status) ($(Format-Ts $_.Time))" }) + @(@($monitor.Results) | Where-Object { $_.Status -in 'FAIL', 'WARN' } | Select-Object -First 15 | ForEach-Object { "[$($_.Status)] $($_.CheckId) $($_.Item): $($_.Detail)" }))
+    $monResult = if ($monitor.PSObject.Properties.Name -contains 'Assessment' -and $monitor.Assessment.Result) { "result $($monitor.Assessment.Result); " } else { '' }   # Result since 2.1.0
+    Set-L 'L18' $s ("interactive: {0} ({1}FAIL {2}, WARN {3}); scheduled monitor on {4} host(s)" -f $monitor.Overall, $monResult, $monitor.Counts.FAIL, $monitor.Counts.WARN, $hostMon.Count) (@($monAge) + @($hostMon | ForEach-Object { "scheduled monitor $($_.Host): $($_.Status) ($(Format-Ts $_.Time))" }) + @(@($monitor.Results) | Where-Object { $_.Status -in 'FAIL', 'WARN' } | Select-Object -First 15 | ForEach-Object { "[$($_.Status)] $($_.CheckId) $($_.Item): $($_.Detail)" }))
 } else { Set-L 'L18' 'OPEN' 'no monitor report (Watch-CloudUserConformance.ps1 -Html)' }
 
 # L19
@@ -770,7 +771,7 @@ Set-Content -LiteralPath (Join-Path $bundle 'README-FIRST.md') -Value $rf.ToStri
 #region --- Console summary --------------------------------------------------------------------------
 Write-SoaSection 'Validation L1-L20'
 foreach ($i in $items) {
-    $col = switch ($i.Status) { 'PASS' { 'Green' } 'FAIL' { 'Red' } 'WARN' { 'Yellow' } 'REVIEW' { 'Cyan' } default { 'Gray' } }
+    $col = switch ($i.Status) { 'PASS' { 'Green' } 'FAIL' { 'Red' } 'WARN' { 'Yellow' } 'REVIEW' { 'Yellow' } default { 'Gray' } }   # REVIEW: your confirmation is needed (-Record)
     Write-Host ("  {0,-4} {1,-7} {2,-40} {3}" -f $i.Id, $i.Status, $i.Title, $(if ($i.Manual) { "manual: $($i.Manual)" } else { $i.AutoDetail })) -ForegroundColor $col
 }
 Write-Host ''

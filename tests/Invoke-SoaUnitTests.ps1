@@ -282,10 +282,27 @@ Remove-Item -LiteralPath (Join-Path $scopeDir 'Scratch.ps1') -Force
 Set-Content -LiteralPath (Join-Path $scopeDir 'List.ps1') -Value @('$l = New-Object System.Collections.Generic.List[object]', '$a = @($l)')
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
 Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails on @() around a List[object]'
-Set-Content -LiteralPath (Join-Path $scopeDir 'List.ps1') -Value @('$l = New-Object System.Collections.Generic.List[object]', '$a = $l.ToArray()', '$b = @($l | Where-Object { $_ })', 'function Get-Other([object[]]$L) { @($L) }')
+Set-Content -LiteralPath (Join-Path $scopeDir 'List.ps1') -Value @('$l = New-Object System.Collections.Generic.List[object]', '$a = $l.ToArray()', '$b = @($l | Where-Object { $_ })', 'function Get-Other([object[]]$L) { @($L) }', '$rows = foreach ($i in 1..2) { $v = New-Object System.Collections.Generic.List[object]; $i }', '$c = @($rows)')
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
-Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts ToArray(), a pipeline and the same name in another function'
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts ToArray(), a pipeline, the same name in another function and loop output'
 Remove-Item -LiteralPath (Join-Path $scopeDir 'List.ps1') -Force
+# A parameter replaced by a variable of the same name in other case (2.0.8: $p replaced $P in the monitor's host block)
+Set-Content -LiteralPath (Join-Path $scopeDir 'Param.ps1') -Value @('$sb = { param($P) $p = Get-Item x; $P.Admin }', 'function Set-X([string]$Mode) { $mode = 1 }')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 1) 'Test-SoaScriptScope.ps1 fails when a variable of the same name in other case replaces a parameter'
+Set-Content -LiteralPath (Join-Path $scopeDir 'Param.ps1') -Value @('param([string]$ConfigPath)', '$ConfigPath = Resolve-X $ConfigPath', '$sb = { param($P) $diag = Get-Item x; $P.Admin }', 'function Get-Y { $p = 1 }')
+& $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') -Path $scopeDir *> $null
+Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 accepts a reassignment in the same spelling and the name in another scope'
+Remove-Item -LiteralPath (Join-Path $scopeDir 'Param.ps1') -Force
+# Assessment of monitor results (Get-SoaCheckAssessment, docs/CHECKS.md)
+$as = Get-SoaCheckAssessment -CheckId 'TASK-MISSING' -Status 'FAIL' -PlannedSteps @('HostGroup', 'DeployTasks')
+Assert-Test ($as.Class -eq 'PLANNED' -and $as.Fix -match 'DeployTasks') 'assessment: a check that a step of the dry run creates is PLANNED'
+Assert-Test ((Get-SoaCheckAssessment -CheckId 'TASK-MISSING' -Status 'FAIL').Class -eq 'ACTION') 'assessment: the same check without that step is ACTION'
+Assert-Test ((Get-SoaCheckAssessment -CheckId 'USR-PSOGROUP' -Status 'FAIL' -PlannedSteps @('DeployTasks')).Class -eq 'FOLLOW-UP') 'assessment: users not yet in the PSO group are FOLLOW-UP (reconcile run)'
+Assert-Test ((Get-SoaCheckAssessment -CheckId 'AGENT-SVC' -Status 'FAIL' -PlannedSteps @('DeployTasks')).Class -eq 'BLOCKER') 'assessment: a missing provisioning agent is a BLOCKER'
+Assert-Test ((Get-SoaCheckAssessment -CheckId 'DC-LOAD' -Status 'WARN').Class -eq 'FOLLOW-UP' -and (Get-SoaCheckAssessment -CheckId 'DC-LOAD' -Status 'FAIL').Class -eq 'BLOCKER') 'assessment: status-specific class (DC-LOAD WARN / FAIL)'
+Assert-Test ((Get-SoaCheckAssessment -CheckId 'DC-KERB-0x17' -Status 'FAIL').Class -eq 'REVIEW') 'assessment: wildcard entry for Kerberos status codes'
+Assert-Test ($null -eq (Get-SoaCheckAssessment -CheckId 'TASK-MISSING' -Status 'PASS') -and (Get-SoaCheckAssessment -CheckId 'NO-SUCH-CHECK' -Status 'WARN').Class -eq 'REVIEW') 'assessment: nothing for PASS, REVIEW for an unknown check'
 $htmlRows = New-Object System.Collections.Generic.List[object]
 $htmlRows.Add([pscustomobject]@{ Status = 'PASS'; Item = 'a' }); $htmlRows.Add([pscustomobject]@{ Status = 'WARN'; Item = 'b<c' })
 try { $html = ConvertTo-SoaHtmlTable -Rows $htmlRows -Properties @('Status', 'Item'); Assert-Test (([regex]::Matches($html, '<tr class=')).Count -eq 2 -and $html -match 'b&lt;c') 'ConvertTo-SoaHtmlTable accepts a List[object] (no @() around it)' }

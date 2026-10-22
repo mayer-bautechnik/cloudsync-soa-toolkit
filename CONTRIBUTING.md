@@ -40,7 +40,7 @@ The sign-off line (`Signed-off-by: Name <email>`) confirms that you have the rig
 - Read [AGENTS.md](AGENTS.md) (rules that must stay true) and, for design questions, [docs/DECISIONS.md](docs/DECISIONS.md).
 - Your `SoaToolkit.config.psd1` and `SoaToolkit.terms.txt` are git-ignored. Change only the templates (`*.example.*`), and keep them free of real values.
 - Run `.\tools\Invoke-SoaStaticChecks.ps1` before you open a pull request. It runs the parser, PSScriptAnalyzer, the tests, the security claims, the script-scope check and the hygiene checks. Started from PowerShell 7 on Windows, it also runs the tests under Windows PowerShell 5.1. CI runs the same checks on both versions, and a pull request is merged only when CI is green.
-- Describe user-visible changes in `CHANGELOG.md` under `## Unreleased` (Fixed / Changed / New). Do not change the version; the maintainer sets it at release time with `tools\Set-SoaVersion.ps1` ([docs/RELEASING.md](docs/RELEASING.md)).
+- Describe user-visible changes in `CHANGELOG.md` under `## Unreleased` (Fixed / Changed / New). Do not change the version; it is set at release time with `tools\Set-SoaVersion.ps1`, after the maintainer has agreed on it ([docs/RELEASING.md](docs/RELEASING.md)).
 - Target Windows PowerShell 5.1 **and** PowerShell 7.x. Check with PSScriptAnalyzer using `PSScriptAnalyzerSettings.psd1` (the VS Code workspace settings in `.vscode/` use it automatically and enable `git.alwaysSignOff`).
 - Follow the naming scheme: `Soa*` = toolkit / infrastructure / Microsoft feature, `CloudUser*` = target state of the users; approved PowerShell verbs.
 - Put shared logic into `SoaToolkit.psm1`.

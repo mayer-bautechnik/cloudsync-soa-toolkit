@@ -61,7 +61,7 @@
     .\Install-SoaToolkit.ps1 -Step SetMode -Mode Enforced
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
     Run as Domain Admin from an admin workstation (PAW) with RSAT (ActiveDirectory, GroupPolicy).
     All AD and GPO writes go to the PDC emulator. WinRM (5985) to every writable DC and agent host is required.
 #>
@@ -357,7 +357,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                         else {
                             $err = if ($res.Error) { $res.Error } else { 'Test-ADServiceAccount returned False' }
                             if ($err -match 'RSAT') { break }
-                            Write-Host "  $($r.Host): waiting for replication / group membership ($i/6) ..." -ForegroundColor Yellow
+                            Write-Host "  $($r.Host): waiting for replication / group membership ($i/6) ..." -ForegroundColor Cyan
                             Start-Sleep -Seconds 30
                         }
                     }
@@ -868,8 +868,8 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
             Write-SoaSection "Delegate: least privilege for $($cfg.GmsaName)"
             $gmsa = Get-SoaJobGmsa -Config $cfg -Context $ctx
             if (-not (Test-StepPrerequisite $gmsa "gMSA $($cfg.GmsaName) not found - run -Step Gmsa first.")) { break }
-            $mode = Get-SoaPolicyMode -Context $ctx
-            if ($mode -eq 'Enforced') { Write-Warning 'Policy is Enforced: ACL changes on marked objects (TestUser) are blocked for your account. Container ACLs still work.' }
+            $policyMode = Get-SoaPolicyMode -Context $ctx   # not $mode: that would replace the parameter -Mode for SetMode
+            if ($policyMode -eq 'Enforced') { Write-Warning 'Policy is Enforced: ACL changes on marked objects (TestUser) are blocked for your account. Container ACLs still work.' }
             $aces = @()
             $scope = @(Get-SoaWriteScope -Config $cfg -Context $ctx)
             Write-Host ("Write scope ({0}): {1}" -f $cfg.WriteScope, ($scope -join '; '))
@@ -1135,7 +1135,7 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 do {
                     Start-Sleep -Seconds 15
                     $pending = @($ctx.WritableDcs | Where-Object { (Get-SoaPolicyMode -Context $ctx -Server $_) -ne $Mode })
-                    if ($pending.Count) { Write-Host "  waiting for replication: $($pending -join ', ')" -ForegroundColor Yellow }
+                    if ($pending.Count) { Write-Host "  waiting for replication: $($pending -join ', ')" -ForegroundColor Cyan }
                 } while ($pending.Count -and (Get-Date) -lt $deadline)
                 Start-Sleep -Seconds 15
                 Show-PolicyState @(Get-PolicyState $switchTime.AddMinutes(-1))
@@ -1231,7 +1231,10 @@ foreach ($current in ($order | Where-Object { $Step -contains $_ })) {
                 if (@($state | Where-Object { $_.LoadStatus -eq 'ERROR' }).Count) { Write-SoaLine FAIL 'POLICY LOAD ERROR on at least one DC - do NOT switch to Enforced.' }
                 if (@($state | Where-Object { $_.LoadStatus -eq 'NONE' }).Count) { Write-SoaLine INFO 'No 3095 since -Since on some DCs (policy unchanged in that window or diagnostics level 0). Use an earlier -Since.' }
             } else { Write-SoaLine WARN 'CN=Cloud not present yet.' }
-            Invoke-ReadOnlyScript (Join-Path $ScriptRoot 'Watch-CloudUserConformance.ps1') @{ Scope = 'All'; ConfigPath = $ConfigPath; Html = $true }
+            # In a dry run the monitor classifies what the steps of this run would create as PLANNED
+            $watchArgs = @{ Scope = 'All'; ConfigPath = $ConfigPath; Html = $true }
+            if ($WhatIfPreference) { $watchArgs.PlannedSteps = @($Step | Select-Object -Unique) }
+            Invoke-ReadOnlyScript (Join-Path $ScriptRoot 'Watch-CloudUserConformance.ps1') $watchArgs
         }
     }
     Write-InstallLog "Step $current finished"

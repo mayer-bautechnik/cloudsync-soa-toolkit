@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 2.1.0 – 2026-10-22
+
+Assessment of every FAIL / WARN of the monitor with a result line for the reader (OK, PENDING, ATTENTION, ACTION REQUIRED; in a dry run READY / NOT READY FOR THE REAL RUN), and fixes for defects that the lab dry run of 2.0.8 showed in the monitor and the static check then found.
+
+### Fixed
+
+- **Monitor on domain controllers: audit policy, event window, Kerberos failures and agent service were never read** (affected: 2.0.5-2.0.8 in the code; older versions not checked).
+  - Cause: in the host block of `Watch-CloudUserConformance.ps1`, `$p = Get-ItemProperty ...` replaced the parameter `$P` (variable names are case-insensitive). From that line on, on every DC:
+    - the effective audit policy was "not readable" (`-Scope All`);
+    - the time window for the events 3097 / 3098 was empty, so both were always 0 (PASS) - the counts before switching to Enforced were not reliable;
+    - the XPath query for Kerberos failures was invalid ("The specified query is invalid"), so failures of cloud users (0x17, 0x12, 0x18) were never reported;
+    - the provisioning agent service was not queried: on a DC that is also an agent host, `AGENT-SVC` was always FAIL ("service not found"), also in the scheduled monitor (event 2002 at every run).
+  - Fix: the variable is now `$diag`. Deploy 2.1.0 to the hosts (`-Step DeployTasks`).
+- **`Install-SoaToolkit.ps1`: SetMode could ignore `-Mode`** (affected: 2.0.5-2.0.8 in the code; older versions not checked). The Delegate step stored the current policy mode in `$mode`, which replaced the parameter `-Mode`. A run with Delegate and SetMode (for example `-Step Delegate, SetMode -Mode Enforced`) then applied the current mode instead of the requested one: SetMode reported SAME and changed nothing. `-Step SetMode` on its own was not affected.
+- **Monitor: WARN "Conformance errors" without text** when the `SoaToolkit` event log did not exist or had no error event (an empty result was counted as one entry).
+- **Monitor: the KIR check named the GPO `''`** when the expected feature IDs came from the manifest instead of `deployment.json`.
+- **`tools/Test-SoaScriptScope.ps1`, fourth check:** `@($x)` was reported when `$x` held the output of a loop that creates a `List[object]` inside; only a direct assignment (`$x = New-Object ...`) counts now.
+
+### New
+
+- **Assessment of FAIL / WARN** in `Watch-CloudUserConformance.ps1` and the Verify step: every FAIL / WARN gets a class and what to do.
+  - BLOCKER (prerequisite outside the toolkit), ACTION (a toolkit step that is not part of this run), REVIEW (operational finding), FOLLOW-UP (reached after the installation, for example by the first reconcile run or a DC restart), PLANNED (a step of this run creates it).
+  - Console: a line under each item and a closing section with the counts, the to-do list and the follow-up actions. CSV, JSON and HTML: columns `Class` and `Fix`; JSON: `Assessment`. Status, events and exit code are unchanged.
+- **Dry run:** `Install-SoaToolkit.ps1 -WhatIf` passes its steps to the monitor (`-PlannedSteps`). What these steps create is PLANNED, and the result is **READY FOR THE REAL RUN** or **NOT READY FOR THE REAL RUN** (as long as there is a BLOCKER).
+- **`docs/CHECKS.md`:** every monitor check, where its target state comes from and what to do. `tools/Export-SoaCheckTable.ps1` generates the table from the check origin table in `SoaToolkit.psm1` (`Get-SoaCheckAssessment`); the new hygiene check **H7** fails if the table differs or the monitor uses an unlisted check. README quick start, SETUP, OPERATIONS and VALIDATION (L2) explain how to read a dry run.
+- **`tools/Test-SoaScriptScope.ps1`, fifth check:** a variable that differs from a parameter only in case and so replaces it. Run against 2.0.8, it reports `Watch-CloudUserConformance.ps1` (`$p`), `Install-SoaToolkit.ps1` (`$mode`) and `Invoke-CloudUserConformance.ps1` (`$server`, a deliberate reassignment, now in the same spelling).
+- **`tools/Build-SoaRelease.ps1 -Unreleased`:** lab package of a state whose version is not agreed yet, named `cloudsync-soa-toolkit-unreleased-<yyyyMMdd-HHmm>.zip`.
+
+### Changed
+
+- **Monitor console: result instead of "Overall"** (the lab run of 2.1.0 ended with "Overall: FAIL" although everything had run as intended - only the first reconcile run was still pending).
+  - The last line `Overall: <status>` is replaced by **`Result:`** for the reader - OK (green), PENDING (cyan, nothing to do now, says what it waits for), ATTENTION (yellow), ACTION REQUIRED (red); in a dry run READY / NOT READY FOR THE REAL RUN - and a dark grey line **`Monitoring status:`** with the worst raw status, the exit code and the note that events and script sensors use it. Status, events and exit code are unchanged.
+  - A FAIL / WARN of class FOLLOW-UP is shown as `[PEND]` (cyan), one of class PLANNED as `[PLAN]` (green), also per user in *Provisioned users*. A legend line explains the tags. CSV and JSON keep FAIL / WARN; the HTML report has the column `Shown`, colours its rows the same way and shows the result at the top; JSON: `Assessment.Result`.
+  - Class colours: BLOCKER and ACTION red; REVIEW yellow, red if its status is FAIL; FOLLOW-UP cyan; PLANNED green. The section header is "Checks - <domain> - scope <scope>" (it was "Result ... overall FAIL").
+  - A FAIL / WARN without a class (checks of kind Info) is listed under *To do* and counts for the result.
+  - `TASK-STATE`: a task that has not run yet (0x41303) says "not run yet".
+- **Signal words and colours across the toolkit** (`docs/CHECKS.md`, new section): skipped lines of Install / Uninstall show `[SKIP]` instead of `~` (other tools use `~` for "changed in place"); "waiting for replication" and "not expired yet" are cyan (waiting) instead of yellow; the validation status REVIEW of `Export-SoaReport.ps1` is yellow (your confirmation is needed) instead of cyan. L18 also shows the result of the monitor.
+- **`docs/SETUP.md`:** without `-WhatIf`, Install asks for confirmation before changes with a high impact; `-Confirm:$false` for an unattended run.
+- **Release process** (`docs/RELEASING.md`, `AGENTS.md`, `CONTRIBUTING.md`):
+  - the version is set only after the maintainer has agreed on it; until then every state, also a delivery of the AI assistant, keeps the changes under `## Unreleased`;
+  - the AI assistant may set the agreed version with `Set-SoaVersion.ps1 -SkipRemoteCheck`; the maintainer repeats the script with the same version and `-Date`, which changes nothing and adds the check against origin and GitHub;
+  - test in the lab with the release zip before tagging.
+
 ## 2.0.8 – 2026-10-22
 
 Fixes the report output of the monitor, which stopped the Verify step of `Install-SoaToolkit.ps1`, and adds a static check against the cause.

@@ -4,7 +4,7 @@ How a version gets from `main` to a published GitHub release. GitHub releases of
 
 ```mermaid
 flowchart LR
-    A["1 Develop<br/>entries under<br/>## Unreleased"] --> B["2 Prepare<br/>Set-SoaVersion.ps1,<br/>release notes, commit"]
+    A["1 Develop<br/>entries under<br/>## Unreleased"] --> B["2 Prepare<br/>Set-SoaVersion.ps1, release notes,<br/>lab test, commit"]
     B --> C{"CI green?<br/>both jobs"}
     C -- no --> B
     C -- yes --> D["3 Tag<br/>signed, pushed"]
@@ -16,8 +16,8 @@ flowchart LR
 
 | Actor | Part |
 |---|---|
-| Maintainer | decides the version, runs `tools/Set-SoaVersion.ps1`, commits, tags, reviews and publishes the draft. Nothing is published without this last manual step. |
-| AI assistant (optional) | prepares changes and CHANGELOG entries, drafts release notes, runs the static checks and builds the repository zip and a release zip from the same content, for comparison and lab deployment. It does not push, tag or publish. |
+| Maintainer | agrees on the version, runs `tools/Set-SoaVersion.ps1` (again, if the AI assistant prepared the release state), tests in the lab, commits, tags, reviews and publishes the draft. Nothing is published without this last manual step. |
+| AI assistant (optional) | prepares changes and CHANGELOG entries under `## Unreleased`, drafts release notes, runs the static checks and builds the repository zip and a release zip from the same content, for comparison and lab deployment. Once the maintainer has agreed on the version, it runs `Set-SoaVersion.ps1 -SkipRemoteCheck` and delivers the release state. It cannot see GitHub, so it relies on the maintainer for what is published. It does not push, tag or publish. |
 | CI (`.github/workflows/ci.yml`) | static checks and tests on PowerShell 7 and Windows PowerShell 5.1 for every push to `main` and every pull request |
 | Release workflow (`.github/workflows/release.yml`) | runs when a tag `v<major>.<minor>.<patch>` is pushed: checks the tag, builds the asset, creates a **draft** release. It never changes the repository. |
 | GitHub | rulesets for `main` and the release tags, immutable releases, release attestation ([GITHUB-SETTINGS.md](GITHUB-SETTINGS.md)) |
@@ -25,7 +25,8 @@ flowchart LR
 ## Version rules
 
 - [Semantic Versioning](https://semver.org/): patch for fixes, minor for new features, major for breaking changes. A published version never changes.
-- The version is changed **only** by `tools/Set-SoaVersion.ps1`, at release time. Between releases, `main` carries the last released version; new entries collect in `CHANGELOG.md` under `## Unreleased`.
+- The version is changed **only** by `tools/Set-SoaVersion.ps1`, at release time, and only after the maintainer has agreed on it. Until then, `main` carries the last released version and new entries collect in `CHANGELOG.md` under `## Unreleased` - also in deliveries of the AI assistant. This keeps every state of the repository consistent.
+- A lab package of a state whose version is not agreed yet is built with `tools/Build-SoaRelease.ps1 -Unreleased`: its name is `cloudsync-soa-toolkit-unreleased-<yyyyMMdd-HHmm>.zip`, so it cannot be mistaken for the published asset of the version it still carries inside. Identify it by its contents digest; never attach it to a release.
 - Places that carry the version (all set by the script, checked by H6): `$script:SoaVersion` / `$script:SoaReleaseDate` in `scripts/SoaToolkit.psm1`, the `Toolkit:` help line of every script in `scripts/`, the header of `SoaToolkit.config.example.psd1`, the README status line, the keywords of `docs/Consolidated-Findings.pdf`, and the CHANGELOG section. Tools and tests carry no version.
 
 ## Phase 1 – Develop
@@ -46,9 +47,11 @@ flowchart LR
    ```powershell
    .\tools\Set-SoaVersion.ps1 -Version <x.y.z>            # -WhatIf shows what would change
    ```
-   It refuses a version that exists as a tag on origin or as a GitHub release (also a draft), sets the version everywhere, turns `## Unreleased` into `## <version> – <date>` and leaves an empty `## Unreleased` above it, rebuilds the PDF (Python 3 with reportlab), runs the static checks and stages the changed files. It does not commit. Running it again with the same version is safe; use this to repeat the check against origin and GitHub on a release commit that was prepared elsewhere (for example by the AI assistant, with `-SkipRemoteCheck`).
-5. Review the diff, commit as `Release <version>` with sign-off, push to `main`.
-6. **Wait until both CI jobs are green for this commit.** Do not tag before that.
+   It refuses a version that exists as a tag on origin or as a GitHub release (also a draft), sets the version everywhere, turns `## Unreleased` into `## <version> – <date>` and leaves an empty `## Unreleased` above it, rebuilds the PDF (Python 3 with reportlab), runs the static checks and stages the changed files. It does not commit. Running it again with the same version is safe.
+   - **Release state prepared by the AI assistant** (it ran the script with `-SkipRemoteCheck`): run it again here with the same version and the date of the CHANGELOG section (`-Date <yyyy-MM-dd>`). It changes nothing and adds the check against origin and GitHub. Without `-Date` it sets today's date, and the contents digest no longer matches the release zip of the AI assistant.
+5. **Test in the lab before tagging** with the release zip of this state (built with `tools/Build-SoaRelease.ps1`, or supplied by the AI assistant): at least the dry run `-Step All -WhatIf` (result "READY FOR THE REAL RUN") and the steps the change affects. A published release cannot be changed; a defect found now is fixed in the same version.
+6. Review the diff, commit as `Release <version>` with sign-off, push to `main`.
+7. **Wait until both CI jobs are green for this commit.** Do not tag before that.
 
 ## Phase 3 – Tag
 

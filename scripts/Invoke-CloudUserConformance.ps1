@@ -39,7 +39,7 @@
             (1000 change, 1001 warning, 1002 error, 1010 run summary). Exit code 0 = OK, 1 = errors.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.0.8 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
     Reads and writes go to one DC per run: the local DC on a writable DC, otherwise a discovered writable DC.
 #>
 [CmdletBinding()]
@@ -71,7 +71,7 @@ Import-Module (Join-Path $ScriptRoot 'SoaToolkit.psm1') -Force -DisableNameCheck
 $ConfigPath = Resolve-SoaConfigPath -ConfigPath $ConfigPath -ScriptRoot $ScriptRoot
 
 $cfg     = Import-SoaConfig -Path $ConfigPath
-$server  = Select-SoaTargetDc -Preferred $Server
+$Server  = Select-SoaTargetDc -Preferred $Server   # deliberate refresh of the parameter (same spelling)
 $Uac     = Get-SoaConstant 'Uac'
 $Ucc     = Get-SoaConstant 'Ucc'
 $KnownGuid = Get-SoaConstant 'Guid'

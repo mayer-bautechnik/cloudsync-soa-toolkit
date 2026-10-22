@@ -4,7 +4,7 @@
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.0.8 (2026-10-22).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.1.0 (2026-10-22).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -32,6 +32,7 @@ Further documentation:
 |---|---|
 | [docs/SETUP.md](docs/SETUP.md) | what Microsoft documents vs. what the toolkit does, step-by-step setup |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | the three primary tasks, topology, monitoring, rollback and decommissioning |
+| [docs/CHECKS.md](docs/CHECKS.md) | every monitor check, where its target state comes from, how to read the result, and what the signal words and colours mean |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | lab validation checklist L1-L20 and its status |
 | [docs/REPORTING.md](docs/REPORTING.md) | anonymized validation reports and bug reports (`Export-SoaReport.ps1`) |
 | [SECURITY.md](SECURITY.md) | security properties S1-S7, how to verify them, how to report vulnerabilities |
@@ -183,6 +184,7 @@ Naming scheme: `Soa*` = toolkit, infrastructure and Microsoft's feature. `CloudU
 cd .\scripts
 .\Test-SoaPrerequisites.ps1
 .\Install-SoaToolkit.ps1 -Step All -KirMsi2025 C:\Install\AD-Enforcement-WS2025.msi -WhatIf
+#   read "Assessment of the dry run" at the end: only BLOCKER stops you, [PLAN] / [PEND] are expected (docs/CHECKS.md)
 .\Install-SoaToolkit.ps1 -Step All -KirMsi2025 C:\Install\AD-Enforcement-WS2025.msi -Refresh
 #   restart the writable DCs one at a time, then
 .\Install-SoaToolkit.ps1 -Step Policy, AllowList, DeployTasks, Verify
