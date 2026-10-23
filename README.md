@@ -1,10 +1,10 @@
 # cloudsync-soa-toolkit
 
-![cloudsync-soa-toolkit: passwordless cloud users in Active Directory, always able to sign in](.github/assets/social-preview-1820x640.png)
+![cloudsync-soa-toolkit: passwordless cloud users in Active Directory, always able to sign in](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/raw/main/.github/assets/social-preview-1820x640.png)
 
 **Passwordless and always able to sign in: cloud users in Active Directory, provisioned by Microsoft Entra Cloud Sync and protected by AD object enforcement.**
 
-> **Status: 2.1.0 (2026-10-22).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
+> **Status: 2.1.1 (2026-10-23).** The end-to-end lab validation of the 2.x scripts is **in progress** ([verification status](#project-status-verification-and-how-it-was-built)). Microsoft Entra Cloud Sync *Entra ID → AD provisioning* and *AD object enforcement* are **preview** features; behaviour and documentation can change. This is an independent community project, not affiliated with or endorsed by Microsoft. Validate in a lab first. There is no warranty (see [License](#license)). Statements are labelled **Documented**, **Observed** or **Inferred** (see [Key findings](#key-findings)).
 
 ---
 
@@ -37,7 +37,7 @@ Further documentation:
 | [docs/REPORTING.md](docs/REPORTING.md) | anonymized validation reports and bug reports (`Export-SoaReport.ps1`) |
 | [SECURITY.md](SECURITY.md) | security properties S1-S7, how to verify them, how to report vulnerabilities |
 | [docs/DECISIONS.md](docs/DECISIONS.md), [docs/EVIDENCE.md](docs/EVIDENCE.md) | design decisions; lab evidence behind *Observed* findings |
-| [docs/MAINTENANCE.md](docs/MAINTENANCE.md), [docs/RELEASING.md](docs/RELEASING.md), [docs/GITHUB-SETTINGS.md](docs/GITHUB-SETTINGS.md), [AGENTS.md](AGENTS.md) | maintenance routines, release process and the GitHub settings it relies on, rules for contributors and coding agents |
+| [docs/MAINTENANCE.md](docs/MAINTENANCE.md), [docs/RELEASING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/docs/RELEASING.md), [docs/GITHUB-SETTINGS.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/docs/GITHUB-SETTINGS.md), [AGENTS.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/AGENTS.md) | maintenance routines, release process and the GitHub settings it relies on, rules for contributors and coding agents |
 | [CHANGELOG.md](CHANGELOG.md), [docs/Consolidated-Findings.pdf](docs/Consolidated-Findings.pdf) | changes per version; findings as PDF |
 
 ---
@@ -158,6 +158,8 @@ The only files you edit are at the top level, as copies of two templates. Your c
 | `SoaToolkit.terms.example.txt` | `SoaToolkit.terms.txt` | names that `Export-SoaReport.ps1` pseudonymizes (and that maintainers keep out of the repository) |
 
 All scripts are in `scripts/` and share `SoaToolkit.psm1` (functions).
+
+The release asset `cloudsync-soa-toolkit-<version>.zip` contains what you need to run the toolkit: `scripts/`, the two templates, the documentation for users, README, CHANGELOG, SECURITY, LICENSE and `SHA256SUMS.txt`. Tools, tests, CI workflows and maintainer documents are only in the repository - clone it, or take *Source code (zip)* of the release, to review them or to build and verify a release yourself. How to download, verify and unblock: [docs/SETUP.md](docs/SETUP.md#31-download-verify-and-unblock).
 
 | Script | Purpose | Writes |
 |---|---|---|
@@ -324,7 +326,7 @@ The code and documentation were written with **extensive AI assistance** (Anthro
 - **measured the *Observed* findings manually** in the lab;
 - reviewed the artifacts, and is accountable for the project.
 
-The end-to-end validation of the 2.x scripts in the lab is not finished yet (see above). Until it is, treat the scripts as **untested in a real domain** and validate them in your own lab first. Contributions with AI assistance are welcome under the rules in [CONTRIBUTING.md](CONTRIBUTING.md).
+The end-to-end validation of the 2.x scripts in the lab is not finished yet (see above). Until it is, treat the scripts as **untested in a real domain** and validate them in your own lab first. Contributions with AI assistance are welcome under the rules in [CONTRIBUTING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/CONTRIBUTING.md).
 
 ## Security properties
 
@@ -372,7 +374,7 @@ Retrieved = date the source was read for this project.
 ## Authors, contributing, license
 
 - **Licensors / authors:** GEBR. MAYER GmbH + Co. KG (GEBR. MAYER Bautechnik) and Johannes Lämmermann.
-- **Contributors:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Contributors:** see [CONTRIBUTING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/CONTRIBUTING.md).
 - **Bugs, lab results, questions:** issue forms. Attach a reviewed, anonymized package from `Export-SoaReport.ps1` ([docs/REPORTING.md](docs/REPORTING.md)). Security-relevant findings go only through the private vulnerability report ([SECURITY.md](SECURITY.md)).
 - **Repository:** https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 
@@ -385,6 +387,6 @@ Source code and documentation are licensed under the **[Mozilla Public License 2
 - if you **distribute** modified files of this project, you must make those files available in source form under the MPL-2.0 and keep the license notices (including the copyright line and repository link in the file headers);
 - internal use without distribution creates no publication obligation.
 
-This summary is not legal advice; the license text is authoritative. Contributions are accepted under the same license (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+This summary is not legal advice; the license text is authoritative. Contributions are accepted under the same license (see [CONTRIBUTING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/CONTRIBUTING.md)).
 
 *Microsoft, Entra, Active Directory, Windows Hello and Azure are trademarks of the Microsoft group of companies. This project is not affiliated with Microsoft.*

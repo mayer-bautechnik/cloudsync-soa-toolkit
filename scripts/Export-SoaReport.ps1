@@ -82,7 +82,7 @@
     .\Export-SoaReport.ps1 -Package 'C:\SoaToolkitAdmin\Reports\Export\SoaReport_Validation_20261121_093015'
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.1 (2026-10-23)
     Run as Domain Admin from the admin workstation (RSAT, WinRM to the toolkit hosts). See docs/REPORTING.md.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Collect', SupportsShouldProcess = $true, ConfirmImpact = 'High')]

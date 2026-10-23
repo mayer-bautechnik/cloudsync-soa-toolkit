@@ -17,6 +17,10 @@
         script - are not counted.
       - otherwise: the working folder minus the export-ignore paths and local files (.git, reports, *.local.*)
     Then:
+      - only the files for users stay (allow-list $releaseInclude / $releaseExclude below): README, LICENSE, CHANGELOG,
+        SECURITY, the two templates, scripts/ and docs/ without the maintainer documents. tools/, tests/, .github/,
+        .vscode/ and the other repository files are in the source code archives of the tag, not in the asset. The
+        build fails if a required file is missing or a packaged document links to a file that is not packaged.
       - SHA256SUMS.txt (sha256sum format) for every file -> Export-SoaReport.ps1 compares the deployed scripts with it
       - zip with forward slashes (portable) and the prefix folder cloudsync-soa-toolkit/; every entry carries the
         release date (00:00) as its time, so the timestamps do not depend on when or where the zip was built
@@ -101,6 +105,43 @@ if ($inGit) {
     $commit = 'working folder'
 }
 
+# Content of the release asset: only what is needed to run, configure, read and verify the toolkit. Tools, tests, CI,
+# editor settings and maintainer documents stay in the repository and in the source code archives that GitHub offers
+# for every tag (docs/RELEASING.md, "What the release asset contains"). New top-level files are left out unless listed.
+$releaseInclude = @('README.md', 'LICENSE', 'CHANGELOG.md', 'SECURITY.md', 'SoaToolkit.config.example.psd1', 'SoaToolkit.terms.example.txt', 'scripts/', 'docs/')
+$releaseExclude = @('docs/RELEASING.md', 'docs/GITHUB-SETTINGS.md', 'docs/src/')
+$releaseRequired = @('README.md', 'LICENSE', 'SoaToolkit.config.example.psd1', 'scripts/SoaToolkit.psm1', 'scripts/Install-SoaToolkit.ps1')
+function Test-ReleasePath([string]$Rel, [string[]]$List) {
+    foreach ($e in $List) { if ($Rel -eq $e -or ($e.EndsWith('/') -and $Rel.StartsWith($e))) { return $true } }
+    $false
+}
+$leftOut = 0
+foreach ($f in @(Get-ChildItem -LiteralPath $top -Recurse -File -Force)) {
+    $rel = $f.FullName.Substring($top.Length).TrimStart('\', '/') -replace '\\', '/'
+    if ((Test-ReleasePath $rel $releaseInclude) -and -not (Test-ReleasePath $rel $releaseExclude)) { continue }
+    Remove-Item -LiteralPath $f.FullName -Force
+    $leftOut++
+}
+foreach ($d in @(Get-ChildItem -LiteralPath $top -Recurse -Directory -Force | Sort-Object { $_.FullName.Length } -Descending)) {
+    if (-not @(Get-ChildItem -LiteralPath $d.FullName -Force).Count) { Remove-Item -LiteralPath $d.FullName -Force }
+}
+$missing = @($releaseRequired | Where-Object { -not (Test-Path -LiteralPath (Join-Path $top $_)) })
+if ($missing.Count) { throw "Release asset incomplete - missing: $($missing -join ', ')" }
+# Relative links of the packaged documents must point to packaged files (link documents that stay in the repository
+# with their full GitHub URL)
+$broken = foreach ($md in @(Get-ChildItem -LiteralPath $top -Recurse -File -Filter '*.md')) {
+    $text = [IO.File]::ReadAllText($md.FullName)
+    foreach ($m in [regex]::Matches($text, '\]\(([^)\s]+)\)')) {
+        $target = $m.Groups[1].Value
+        if ($target -match '^(https?:|mailto:|#)') { continue }
+        $path = [Uri]::UnescapeDataString(($target -split '#')[0])
+        if (-not (Test-Path -LiteralPath (Join-Path $md.DirectoryName $path))) {
+            '{0}: {1}' -f ($md.FullName.Substring($top.Length).TrimStart('\', '/') -replace '\\', '/'), $target
+        }
+    }
+}
+if (@($broken).Count) { throw ("Packaged documents link to files that are not in the release asset:`n - " + (@($broken) -join "`n - ")) }
+
 # Version and date of the packaged content
 $psmText = Get-Content -LiteralPath (Join-Path (Join-Path $top 'scripts') 'SoaToolkit.psm1') -Raw
 $version = if ($psmText -match "\`$script:SoaVersion\s*=\s*'([^']+)'") { $Matches[1] } else { throw 'version not found in SoaToolkit.psm1' }
@@ -136,6 +177,6 @@ Remove-Item -LiteralPath $stage -Recurse -Force
 
 Write-Host "Package : $zip" -ForegroundColor Cyan
 Write-Host "Source  : $commit"
-Write-Host "Files   : $(@($sums).Count + 1) (incl. SHA256SUMS.txt)"
+Write-Host "Files   : $(@($sums).Count + 1) (incl. SHA256SUMS.txt); $leftOut repository-only file(s) left out"
 Write-Host "SHA-256 : $hash" -ForegroundColor Green
 Write-Host "Contents: $contents  (SHA-256 of SHA256SUMS.txt - compare this value between builds)" -ForegroundColor Green

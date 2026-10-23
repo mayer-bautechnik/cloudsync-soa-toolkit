@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.1.1 – 2026-10-23
+
+A leaner release asset with only the files users need, and a simpler download path: verify the zip, unblock the zip, extract. The scripts are functionally unchanged (only their version lines).
+
+### Changed
+
+- **Release asset for users only** ([D-24](docs/DECISIONS.md)): `cloudsync-soa-toolkit-<version>.zip` contains `scripts/`, the two templates, the documentation for users and reviewers (`docs/` without `RELEASING.md`, `GITHUB-SETTINGS.md` and `docs/src/`), README, CHANGELOG, SECURITY, LICENSE and `SHA256SUMS.txt`. `tools/`, `tests/`, `.github/`, `.vscode/`, `AGENTS.md`, `CONTRIBUTING.md`, `PSScriptAnalyzerSettings.psd1`, `.gitattributes` and `.gitignore` are only in the repository and in the source code archives of the release.
+  - `tools/Build-SoaRelease.ps1` packages an allow-list and fails if a required file is missing or a packaged document links to a file that is not packaged. Links to repository-only documents in README, CHANGELOG and SECURITY now use their full GitHub URL.
+  - New unit tests build the asset from a copy of the repository and check its content and the link check.
+- **Download, verify, unblock** (`docs/SETUP.md`, new section 3.1; release notes template): verify the zip with `gh release verify-asset` (release attestation) or its SHA-256, then `Unblock-File` on the zip itself, then extract - instead of unblocking every extracted file. Separate paths for the GitHub CLI, a browser download, isolated networks and a clone of the repository.
+
 ## 2.1.0 – 2026-10-22
 
 Assessment of every FAIL / WARN of the monitor with a result line for the reader (OK, PENDING, ATTENTION, ACTION REQUIRED; in a dry run READY / NOT READY FOR THE REAL RUN), and fixes for defects that the lab dry run of 2.0.8 showed in the monitor and the static check then found.
@@ -203,7 +214,7 @@ Fix for Windows PowerShell 5.1, a CI gate in the release process, and consistent
 
 ### Changed
 
-- **Release process ([docs/RELEASING.md](docs/RELEASING.md)):**
+- **Release process ([docs/RELEASING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/docs/RELEASING.md)):**
   - the commit is pushed and both CI jobs must be green **before** the tag is created and the release is published;
   - `tools/Build-SoaRelease.ps1` refuses to build when the CI runs of the commit are not all successful (checked with the GitHub CLI; `-SkipCiCheck` only with a reason);
   - a new section describes what to do when a published, immutable release turns out to be broken: fix forward, never move a published tag.
@@ -236,12 +247,12 @@ Maintainability, transparency and verifiability. No change to the target state, 
 - Issue forms (*Bug report*, *Lab validation result*). Release notes are now in `.github/release-notes/`.
 - PDF source in the repository: `docs/src/build_findings_pdf.py` (version and date read from the module).
 - Documentation:
-  - [AGENTS.md](AGENTS.md): rules for contributors and coding agents.
+  - [AGENTS.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/AGENTS.md): rules for contributors and coding agents.
   - [docs/DECISIONS.md](docs/DECISIONS.md): design decisions D-01 to D-20.
   - [docs/EVIDENCE.md](docs/EVIDENCE.md): lab evidence behind *Observed*.
   - [docs/VALIDATION.md](docs/VALIDATION.md): checklist L1-L20.
   - [docs/REPORTING.md](docs/REPORTING.md): reports and bug reports.
-  - [docs/RELEASING.md](docs/RELEASING.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md): release process and recurring maintenance.
+  - [docs/RELEASING.md](https://github.com/mayer-bautechnik/cloudsync-soa-toolkit/blob/main/docs/RELEASING.md), [docs/MAINTENANCE.md](docs/MAINTENANCE.md): release process and recurring maintenance.
   - [SECURITY.md](SECURITY.md): security properties S1-S7, how to verify them, a prompt for reviewing with your own AI.
 - README:
   - **verification status**, with the open lab validation items L1-L20;

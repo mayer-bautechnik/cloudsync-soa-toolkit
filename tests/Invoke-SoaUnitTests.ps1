@@ -17,6 +17,7 @@
     - tools\Set-SoaVersion.ps1 on a fixture (version everywhere, Unreleased -> version section, notes template,
       repeat, refusals) and tools\Test-SoaReleaseTag.ps1 against a local git repository (unsigned, lightweight, not on
       main, SSH-signed with an allowed and with an unknown key)
+    - tools\Build-SoaRelease.ps1 on a copy of the repository (allow-list of the release asset, link check)
     - Export-SoaReport.ps1 end to end against a mocked ActiveDirectory module (tests\mocks) and generated fixtures:
       L1-L20 evaluation, anonymization, map outside the folder, leak check, packaging refusal on a leak
     Child processes are used where mocks must not leak into the main test scope.
@@ -382,6 +383,28 @@ if (-not $git) { Write-Host 'SKIP Test-SoaReleaseTag.ps1 tests (git not found)' 
         }
     }
 }
+# Release asset: allow-list and link check of tools\Build-SoaRelease.ps1 (working-folder mode: no git, no GitHub)
+$br = Join-Path $tmp 'build-src'; $bo = Join-Path $tmp 'build-out'
+New-Item -Path $br, $bo -ItemType Directory -Force | Out-Null
+foreach ($i in @(Get-ChildItem -LiteralPath $repo -Force | Where-Object { $_.Name -ne '.git' })) { Copy-Item -LiteralPath $i.FullName -Destination $br -Recurse -Force }
+$buildScript = Join-Path (Join-Path $br 'tools') 'Build-SoaRelease.ps1'
+& $exe -NoProfile -NonInteractive -File $buildScript -OutputPath $bo -Unreleased *> $null
+$bz = @(Get-ChildItem -LiteralPath $bo -Filter '*.zip')
+Assert-Test ($LASTEXITCODE -eq 0 -and $bz.Count -eq 1) 'Build-SoaRelease.ps1 builds the release zip from a working folder'
+if ($bz.Count -eq 1) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $za = [IO.Compression.ZipFile]::OpenRead($bz[0].FullName)
+    try { $zipNames = @($za.Entries | ForEach-Object { $_.FullName -replace '^cloudsync-soa-toolkit/' }) } finally { $za.Dispose() }
+    $need = @('README.md', 'LICENSE', 'CHANGELOG.md', 'SECURITY.md', 'SHA256SUMS.txt', 'SoaToolkit.config.example.psd1', 'SoaToolkit.terms.example.txt', 'scripts/SoaToolkit.psm1', 'scripts/Install-SoaToolkit.ps1', 'docs/SETUP.md')
+    $absent = @($need | Where-Object { $zipNames -notcontains $_ })
+    Assert-Test ($absent.Count -eq 0) "release zip contains scripts, templates, user documents and SHA256SUMS.txt $($absent -join ', ')"
+    $repoOnly = @($zipNames | Where-Object { $_ -match '^(tools|tests|\.github|\.vscode)/|^(AGENTS\.md|CONTRIBUTING\.md|PSScriptAnalyzerSettings\.psd1|\.gitattributes|\.gitignore)$|^docs/(RELEASING\.md|GITHUB-SETTINGS\.md|src/)' })
+    Assert-Test ($repoOnly.Count -eq 0) "release zip contains no repository-only files $($repoOnly -join ', ')"
+}
+Add-Content -LiteralPath (Join-Path (Join-Path $br 'docs') 'SETUP.md') -Value '[rules](../AGENTS.md)'
+& $exe -NoProfile -NonInteractive -File $buildScript -OutputPath $bo -Unreleased *> $null
+Assert-Test ($LASTEXITCODE -ne 0) 'Build-SoaRelease.ps1 refuses a packaged document that links to a repository-only file'
+
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') *> $null
 Assert-Test ($LASTEXITCODE -eq 0) 'Test-SoaScriptScope.ps1 passes on the toolkit scripts and tools'
 

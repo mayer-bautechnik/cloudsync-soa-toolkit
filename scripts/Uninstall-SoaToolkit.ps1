@@ -59,7 +59,7 @@
     .\Uninstall-SoaToolkit.ps1 -Step RevertUsers -WhatIf
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.1 (2026-10-23)
     Run as Domain Admin from the admin workstation (RSAT ActiveDirectory + GroupPolicy). WinRM to the toolkit hosts.
     Not handled (outside the toolkit): Cloud Sync configuration and attribute mappings, msDS-ObjectSoa on users and
     groups (without a policy it has no effect), Windows updates, the KDS root key (never delete it), pre-existing GPOs.

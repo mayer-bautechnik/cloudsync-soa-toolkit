@@ -4,7 +4,7 @@
 # Project: cloudsync-soa-toolkit - https://github.com/mayer-bautechnik/cloudsync-soa-toolkit
 @{
     # =====================================================================================================
-    # SOA Toolkit configuration TEMPLATE (cloudsync-soa-toolkit 2.1.0)
+    # SOA Toolkit configuration TEMPLATE (cloudsync-soa-toolkit 2.1.1)
     # Copy this file to 'SoaToolkit.config.psd1' in the same folder (top level of the toolkit folder) and adjust
     # the copy. The copy is git-ignored and not part of the release zip, so updates never overwrite it.
     # All values below are PLACEHOLDERS (contoso.com). Keys that are omitted fall back to the defaults in

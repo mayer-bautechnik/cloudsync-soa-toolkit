@@ -39,7 +39,7 @@
             (1000 change, 1001 warning, 1002 error, 1010 run summary). Exit code 0 = OK, 1 = errors.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.1 (2026-10-23)
     Reads and writes go to one DC per run: the local DC on a writable DC, otherwise a discovered writable DC.
 #>
 [CmdletBinding()]

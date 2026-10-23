@@ -198,12 +198,15 @@ if (Test-Path -LiteralPath $notesPath) {
         ''
         '## Verify the download'
         ''
-        'Compare the SHA-256 of the asset with the digest GitHub shows next to it. The zip contains `SHA256SUMS.txt` for every file:'
+        'Verify the zip before you extract it, then unblock the zip itself - the extracted files then carry no download mark:'
         ''
         '```powershell'
-        "Get-FileHash .\cloudsync-soa-toolkit-$Version.zip -Algorithm SHA256"
-        'Get-ChildItem -Recurse | Unblock-File'
+        "gh release verify-asset $tag .\cloudsync-soa-toolkit-$Version.zip --repo $($repo -replace '^https://github\.com/')   # release attestation"
+        "Get-FileHash .\cloudsync-soa-toolkit-$Version.zip -Algorithm SHA256   # without the GitHub CLI: compare with the .sha256 file and the digest next to the asset"
+        "Unblock-File .\cloudsync-soa-toolkit-$Version.zip"
         '```'
+        ''
+        ('The zip contains `SHA256SUMS.txt` for every file. Tools and tests are in the source code archives. Details: [SETUP, section 3.1]({0}/blob/{1}/docs/SETUP.md#31-download-verify-and-unblock)' -f $repo, $tag)
         ''
         "**Full changelog:** $repo/compare/v$current...$tag"
         ''

@@ -55,7 +55,7 @@
     one of these steps would fix is classified PLANNED instead of ACTION.
 
 .NOTES
-    Toolkit: cloudsync-soa-toolkit 2.1.0 (2026-10-22)
+    Toolkit: cloudsync-soa-toolkit 2.1.1 (2026-10-23)
     Never writes to AD. Writes only the event log / status files (Local) or report files (All).
 #>
 [CmdletBinding()]

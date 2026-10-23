@@ -88,7 +88,7 @@ In a small domain the admin scripts can run directly on a domain controller or a
 
 | # | Step | Details |
 |---|---|---|
-| 1 | Verify the download | Compare the SHA-256 of the release ZIP with the value on the release page, then `Get-ChildItem -Recurse \| Unblock-File` |
+| 1 | Verify the download | Verify the release zip, remove the download mark from the zip (not from the extracted files), extract it - [section 3.1](#31-download-verify-and-unblock) |
 | 2 | Prepare the admin workstation | Windows PowerShell 5.1 (7.x works as well), RSAT AD DS + GPMC, Domain Admin (for the setup only), WinRM to all DCs / agent hosts. No separate admin workstation? See [section 2.1](#21-without-a-separate-admin-workstation) |
 | 3 | Microsoft prerequisites | Cloud Sync Entra ID → AD provisioning configured (agents, scope, target container, default user mapping with `msDS-ObjectSoa`); group marking if groups are provisioned; cumulative update on every writable DC; Cloud Kerberos Trust (AzureADKerberos object) |
 | 4 | **Download the KIR package(s)** | WS2022: `aka.ms/ADEnforcementGPMSI2022`, WS2025: `aka.ms/ADEnforcementGPMSI2025` - only for OS versions that run as writable DCs. **Do not** copy the ADMX by hand; the toolkit does it (central store if it exists, otherwise the local store of the workstation; it never creates a central store) |
@@ -97,6 +97,42 @@ In a small domain the admin scripts can run directly on a domain controller or a
 | 7 | Configuration | Copy `SoaToolkit.config.example.psd1` to `SoaToolkit.config.psd1` (both at the top level of the toolkit folder) and edit the copy: `AgentHosts`, `ToolkitGroupOU`, `TestUser`, `ReportPath` (outside `DataPath`), optional names, PSO values, `PilotMode`, `ReconcileMinutes`, `EventLogMaxSizeMB`, `EventLogAllowWef`, `ProjectUrl`. The scripts find it automatically; `-ConfigPath` overrides. |
 | 7a | Terms for reports | Copy `SoaToolkit.terms.example.txt` to `SoaToolkit.terms.txt` and list company, site, project and other names that the toolkit cannot find in AD ([REPORTING.md](REPORTING.md#anonymization)) |
 | 8 | Optional: code-signing certificate | see [section 7](#7-optional-code-signing) |
+
+### 3.1 Download, verify and unblock
+
+The release asset `cloudsync-soa-toolkit-<version>.zip` contains what you need to run the toolkit: `scripts/`, the two templates, the documentation for users (`docs/`), README, CHANGELOG, SECURITY, LICENSE and `SHA256SUMS.txt`. Tools, tests and the CI workflows are in the repository and in *Source code (zip)* of the release.
+
+Windows marks a file that a browser downloads as coming from the internet. With the default execution policy *RemoteSigned*, PowerShell does not run unsigned scripts that carry this mark. Remove the mark **from the zip, after you have verified it**: the files extracted from an unmarked zip carry no mark, so nothing has to be unblocked file by file. `Unblock-File` on a file without the mark does nothing.
+
+**With the GitHub CLI** (admin workstation with internet access):
+
+```powershell
+$v = '<version>'; $repo = 'mayer-bautechnik/cloudsync-soa-toolkit'
+gh release download "v$v" --repo $repo --pattern "cloudsync-soa-toolkit-$v.zip*"
+gh release verify-asset "v$v" ".\cloudsync-soa-toolkit-$v.zip" --repo $repo    # against the release attestation
+Unblock-File ".\cloudsync-soa-toolkit-$v.zip"
+Expand-Archive ".\cloudsync-soa-toolkit-$v.zip" -DestinationPath .
+```
+
+`gh release verify-asset` checks the zip against the release attestation that GitHub created when the release was published.
+
+**With a browser download** (no GitHub CLI): download the zip and the `.sha256` file from the release page.
+
+```powershell
+$v = '<version>'
+$expected = (Get-Content ".\cloudsync-soa-toolkit-$v.zip.sha256" -Raw).Split(' ')[0]
+if ((Get-FileHash ".\cloudsync-soa-toolkit-$v.zip" -Algorithm SHA256).Hash -ne $expected) { throw 'SHA-256 does not match' }
+Unblock-File ".\cloudsync-soa-toolkit-$v.zip"
+Expand-Archive ".\cloudsync-soa-toolkit-$v.zip" -DestinationPath .
+```
+
+Also compare the value with the digest that GitHub shows next to the asset on the release page.
+
+**Isolated networks:** download and verify the zip on a computer with internet access as above, transfer the zip and the `.sha256` file through your approved channel, check the SHA-256 again on the admin workstation, then unblock and extract. No package manager and no internet access are needed; Windows PowerShell 5.1 is enough.
+
+**From the repository** (review, contributions, independent build): `git clone --branch v<version> https://github.com/mayer-bautechnik/cloudsync-soa-toolkit.git`. A clone contains the tools and tests as well.
+
+**Updating:** extract the new version into a new folder and copy your `SoaToolkit.config.psd1` and `SoaToolkit.terms.txt` into it (they are not part of the zip), then follow the upgrade notes of the release.
 
 ## 4. Installation
 
