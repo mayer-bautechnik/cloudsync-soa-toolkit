@@ -402,7 +402,10 @@ if ($bz.Count -eq 1) {
     Assert-Test ($repoOnly.Count -eq 0) "release zip contains no repository-only files $($repoOnly -join ', ')"
 }
 Add-Content -LiteralPath (Join-Path (Join-Path $br 'docs') 'SETUP.md') -Value '[rules](../AGENTS.md)'
-& $exe -NoProfile -NonInteractive -File $buildScript -OutputPath $bo -Unreleased *> $null
+# The build throws, so the child writes to stderr: Windows PowerShell 5.1 turns that into a terminating
+# NativeCommandError under ErrorActionPreference Stop, even with the output redirected
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+try { & $exe -NoProfile -NonInteractive -File $buildScript -OutputPath $bo -Unreleased *> $null } finally { $ErrorActionPreference = $prevEap }
 Assert-Test ($LASTEXITCODE -ne 0) 'Build-SoaRelease.ps1 refuses a packaged document that links to a repository-only file'
 
 & $exe -NoProfile -NonInteractive -File (Join-Path (Join-Path $repo 'tools') 'Test-SoaScriptScope.ps1') *> $null
